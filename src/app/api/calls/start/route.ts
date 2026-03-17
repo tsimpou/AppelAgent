@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     const supabaseServer = createSupabaseServer()
     const { data, error } = await supabaseServer
       .from('calls')
-      .insert({ agent_name })
+      .insert({ agent_name, source: 'live' })
       .select('id')
       .single()
 

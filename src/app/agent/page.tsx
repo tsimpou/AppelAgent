@@ -29,6 +29,9 @@ export default function AgentPage() {
   const [callDuration, setCallDuration] = useState(0)
   const [violationCount, setViolationCount] = useState(0)
   const [finalScore, setFinalScore] = useState<number | null>(null)
+  const [postCallFeedback, setPostCallFeedback] = useState('')
+  const [showFeedback, setShowFeedback] = useState(false)
+  const [isFeedbackStreaming, setIsFeedbackStreaming] = useState(false)
 
   // Refs for stable access inside async callbacks
   const mediaRecorderRef = useRef<MediaRecorder | null>(null)
@@ -253,15 +256,21 @@ export default function AgentPage() {
     }
 
     const duration = Math.floor((Date.now() - callStartTimeRef.current) / 1000)
+    const savedCallId = callIdRef.current
+    const savedAgentName = agentNameRef.current
+    const savedTranscript = transcriptRef.current
+      .map((e) => `${e.speaker === 'agent' ? 'Πράκτορας' : 'Πελάτης'}: ${e.text}`)
+      .join('\n')
+    const savedViolations = violationCountRef.current
 
     try {
       const res = await fetch('/api/calls/end', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          call_id: callIdRef.current,
+          call_id: savedCallId,
           duration_seconds: duration,
-          total_violations: violationCountRef.current,
+          total_violations: savedViolations,
         }),
       })
       const data = await res.json()
@@ -273,6 +282,41 @@ export default function AgentPage() {
     setCallStatus('idle')
     setIsRecording(false)
     callIdRef.current = null
+
+    // Stream post-call QA feedback
+    if (savedCallId) {
+      setShowFeedback(true)
+      setPostCallFeedback('')
+      setIsFeedbackStreaming(true)
+      try {
+        const fbRes = await fetch('/api/calls/feedback', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            call_id: savedCallId,
+            agent_name: savedAgentName,
+            transcript_text: savedTranscript,
+            violations_count: savedViolations,
+            duration,
+          }),
+        })
+        if (fbRes.body) {
+          const reader = fbRes.body.getReader()
+          const decoder = new TextDecoder()
+          let acc = ''
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            acc += decoder.decode(value, { stream: true })
+            setPostCallFeedback(acc)
+          }
+        }
+      } catch (err) {
+        console.error('feedback stream error:', err)
+      } finally {
+        setIsFeedbackStreaming(false)
+      }
+    }
   }, [])
 
   // ── 3-state standby / auto-detect logic ─────────────────────────────
@@ -561,6 +605,87 @@ export default function AgentPage() {
           </div>
         </div>
 
+        {/* Post-call feedback panel */}
+        {showFeedback && (
+          <div className="mt-4 bg-gray-900 border border-gray-700 rounded-xl overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+              <h2 className="text-sm font-semibold text-gray-200">
+                📋 Αξιολόγηση Κλήσης — {agentName}
+              </h2>
+              <div className="flex items-center gap-3">
+                {isFeedbackStreaming && (
+                  <span className="text-xs text-blue-400 animate-pulse">Αναλύω κλήση...</span>
+                )}
+                <button
+                  onClick={() => setShowFeedback(false)}
+                  className="text-gray-500 hover:text-gray-300 text-lg leading-none"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+            <div className="p-4">
+              {!postCallFeedback && isFeedbackStreaming && (
+                <p className="text-gray-500 text-sm animate-pulse">🤔 Σκέφτομαι...</p>
+              )}
+              {postCallFeedback && (() => {
+                const match = postCallFeedback.match(/\{[\s\S]+\}/)
+                if (match) {
+                  try {
+                    const qa = JSON.parse(match[0])
+                    return (
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-3 flex-wrap">
+                          <ScoreBadgeLarge score={qa.score ?? 0} />
+                          {qa.has_violation && (
+                            <span className="bg-red-700/40 text-red-300 border border-red-600 text-xs px-2 py-0.5 rounded-full">
+                              ⚠️ Παράβαση πολιτικής
+                            </span>
+                          )}
+                        </div>
+                        {qa.summary && (
+                          <p className="text-sm text-gray-300 bg-gray-800/50 px-3 py-2 rounded-lg">{qa.summary}</p>
+                        )}
+                        {qa.positives?.length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-green-400 mb-1">✅ Θετικά</p>
+                            <ul className="space-y-0.5">
+                              {(qa.positives as string[]).map((p: string, i: number) => (
+                                <li key={i} className="text-xs text-gray-300">• {p}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {qa.improvements?.length > 0 && (
+                          <div>
+                            <p className="text-xs font-semibold text-yellow-400 mb-1">💡 Βελτίωση</p>
+                            <ul className="space-y-0.5">
+                              {(qa.improvements as string[]).map((p: string, i: number) => (
+                                <li key={i} className="text-xs text-gray-300">• {p}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {qa.next_call_goal && (
+                          <div className="bg-blue-900/20 border border-blue-800/40 rounded-lg px-3 py-2">
+                            <p className="text-xs font-semibold text-blue-400 mb-0.5">🎯 Στόχος επόμενης κλήσης</p>
+                            <p className="text-xs text-gray-300">{qa.next_call_goal}</p>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  } catch {
+                    // JSON not ready yet — show raw streaming text
+                  }
+                }
+                return (
+                  <p className="text-xs text-gray-400 italic whitespace-pre-wrap leading-relaxed">{postCallFeedback}</p>
+                )
+              })()}
+            </div>
+          </div>
+        )}
+
         <div className="mt-3 text-center">
           <a href="/dashboard" className="text-blue-400 hover:text-blue-300 text-xs underline">
             → Dashboard Team Leader
@@ -569,4 +694,12 @@ export default function AgentPage() {
       </div>
     </div>
   )
+}
+
+function ScoreBadgeLarge({ score }: { score: number }) {
+  if (score >= 80)
+    return <span className="bg-green-700 text-white text-sm font-bold px-3 py-1 rounded-full">🏆 {score}/100 — Άριστο</span>
+  if (score >= 50)
+    return <span className="bg-yellow-700 text-white text-sm font-bold px-3 py-1 rounded-full">⚡ {score}/100 — Μέτριο</span>
+  return <span className="bg-red-700 text-white text-sm font-bold px-3 py-1 rounded-full">⚠️ {score}/100 — Χαμηλό</span>
 }
