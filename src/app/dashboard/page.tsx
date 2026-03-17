@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { RefreshCw, PhoneCall, AlertTriangle, Star, Users, Plus, Trash2, ChevronDown, ChevronUp } from 'lucide-react'
+import { RefreshCw, PhoneCall, AlertTriangle, Star, Users, Plus, Trash2, ChevronDown, ChevronUp, Upload } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -86,6 +86,9 @@ export default function DashboardPage() {
   const [newWord, setNewWord] = useState('')
   const [newWordSeverity, setNewWordSeverity] = useState<'low' | 'medium' | 'high'>('medium')
   const [isAddingWord, setIsAddingWord] = useState(false)
+  const [isUploadingFile, setIsUploadingFile] = useState(false)
+  const [uploadSeverity, setUploadSeverity] = useState<'low' | 'medium' | 'high'>('medium')
+  const [uploadResult, setUploadResult] = useState<{ added: number; total: number } | null>(null)
 
   // ── Data fetching ────────────────────────────────────────────────────
   const fetchCalls = useCallback(async () => {
@@ -189,6 +192,34 @@ export default function DashboardPage() {
       console.error('Add ban word error:', err)
     } finally {
       setIsAddingWord(false)
+    }
+  }
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const text = await file.text()
+    const words = text
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith('#'))
+    if (words.length === 0) return
+    setIsUploadingFile(true)
+    setUploadResult(null)
+    try {
+      const res = await fetch('/api/ban-words', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ words, severity: uploadSeverity, added_by: 'admin' }),
+      })
+      const data = await res.json()
+      setUploadResult({ added: data.added ?? 0, total: data.total ?? words.length })
+      await fetchBanWords()
+    } catch (err) {
+      console.error('File upload error:', err)
+    } finally {
+      setIsUploadingFile(false)
+      e.target.value = ''
     }
   }
 
@@ -399,6 +430,47 @@ export default function DashboardPage() {
                   <Plus className="w-4 h-4" />
                   Προσθήκη
                 </button>
+              </div>
+            </div>
+
+            {/* TXT Upload */}
+            <div className="bg-gray-900 rounded-xl border border-gray-800 p-4">
+              <h3 className="text-sm font-semibold text-gray-300 mb-3">Μαζική Εισαγωγή από Αρχείο .txt</h3>
+              <p className="text-xs text-gray-500 mb-3">Ένα αρχείο .txt με μία λέξη ανά γραμμή. Γραμμές που ξεκινούν με # αγνοούνται.</p>
+              <div className="flex flex-wrap gap-2 items-center">
+                <select
+                  value={uploadSeverity}
+                  onChange={(e) => setUploadSeverity(e.target.value as 'low' | 'medium' | 'high')}
+                  className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:outline-none"
+                >
+                  <option value="high">🔴 Υψηλή</option>
+                  <option value="medium">🟡 Μέτρια</option>
+                  <option value="low">⚪ Χαμηλή</option>
+                </select>
+                <label className={`flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  isUploadingFile
+                    ? 'bg-gray-700 opacity-50 cursor-not-allowed'
+                    : 'bg-green-700 hover:bg-green-600'
+                }`}>
+                  <Upload className="w-4 h-4" />
+                  {isUploadingFile ? 'Εισαγωγή...' : 'Επιλογή αρχείου .txt'}
+                  <input
+                    type="file"
+                    accept=".txt,text/plain"
+                    className="hidden"
+                    disabled={isUploadingFile}
+                    onChange={handleFileUpload}
+                  />
+                </label>
+                {uploadResult && (
+                  <span className="text-xs text-gray-300 bg-gray-800 border border-gray-700 px-3 py-2 rounded-lg">
+                    ✅ Προστέθηκαν <strong className="text-green-400">{uploadResult.added}</strong> από{' '}
+                    <strong>{uploadResult.total}</strong> λέξεις{' '}
+                    {uploadResult.total - uploadResult.added > 0 && (
+                      <span className="text-gray-500">({uploadResult.total - uploadResult.added} ήδη υπήρχαν)</span>
+                    )}
+                  </span>
+                )}
               </div>
             </div>
 

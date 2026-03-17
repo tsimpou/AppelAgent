@@ -20,6 +20,34 @@ export async function GET() {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
+    const supabase = createSupabaseServer()
+
+    // ── Bulk insert (from TXT upload) ──────────────────────────────────
+    if (Array.isArray(body.words)) {
+      const rows = (body.words as string[])
+        .map((w) => w.trim().toLowerCase())
+        .filter((w) => w.length > 0)
+        .filter((w, i, arr) => arr.indexOf(w) === i) // deduplicate
+        .map((w) => ({
+          word: w,
+          severity: (body.severity as string) ?? 'medium',
+          added_by: (body.added_by as string) ?? 'admin',
+        }))
+
+      if (rows.length === 0) {
+        return NextResponse.json({ error: 'No valid words in list' }, { status: 400 })
+      }
+
+      const { data, error } = await supabase
+        .from('ban_words')
+        .upsert(rows, { onConflict: 'word', ignoreDuplicates: true })
+        .select()
+
+      if (error) throw error
+      return NextResponse.json({ success: true, added: data?.length ?? 0, total: rows.length })
+    }
+
+    // ── Single insert ──────────────────────────────────────────────────
     const { word, severity, added_by } = body as {
       word: string
       severity: string
@@ -30,7 +58,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'word is required' }, { status: 400 })
     }
 
-    const supabase = createSupabaseServer()
     const { data, error } = await supabase
       .from('ban_words')
       .insert({
