@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Groq from 'groq-sdk'
-import { supabaseServer } from '@/lib/supabaseServer'
+import { createSupabaseServer } from '@/lib/supabaseServer'
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
@@ -25,7 +25,7 @@ export async function POST(request: NextRequest) {
     const foundWord = FORBIDDEN_WORDS.find((w) => lowerText.includes(w.toLowerCase()))
     if (foundWord) {
       if (call_id) {
-        await supabaseServer.from('violations').insert({
+        await createSupabaseServer().from('violations').insert({
           call_id,
           agent_name: agent_name ?? 'Unknown',
           text,
@@ -60,7 +60,7 @@ Respond ONLY with valid JSON in this exact format:
     const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { violation: false }
 
     if (result.violation && call_id) {
-      await supabaseServer.from('violations').insert({
+      await createSupabaseServer().from('violations').insert({
         call_id,
         agent_name: agent_name ?? 'Unknown',
         text,

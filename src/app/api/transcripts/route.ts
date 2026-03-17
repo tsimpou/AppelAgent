@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseServer } from '@/lib/supabaseServer'
+import { createSupabaseServer } from '@/lib/supabaseServer'
 
 export async function POST(request: NextRequest) {
   try {
@@ -15,6 +15,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'call_id, speaker, and text are required' }, { status: 400 })
     }
 
+    const supabaseServer = createSupabaseServer()
     const { error } = await supabaseServer.from('transcripts').insert({
       call_id,
       speaker,

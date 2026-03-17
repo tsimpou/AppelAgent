@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseServer } from '@/lib/supabaseServer'
+import { createSupabaseServer } from '@/lib/supabaseServer'
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,6 +10,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'agent_name is required' }, { status: 400 })
     }
 
+    const supabaseServer = createSupabaseServer()
     const { data, error } = await supabaseServer
       .from('calls')
       .insert({ agent_name })

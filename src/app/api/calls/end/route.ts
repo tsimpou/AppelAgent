@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { supabaseServer } from '@/lib/supabaseServer'
+import { createSupabaseServer } from '@/lib/supabaseServer'
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +16,7 @@ export async function POST(request: NextRequest) {
 
     const performance_score = Math.max(0, 100 - (total_violations ?? 0) * 5)
 
+    const supabaseServer = createSupabaseServer()
     const { error } = await supabaseServer
       .from('calls')
       .update({
