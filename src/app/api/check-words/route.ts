@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import Groq from 'groq-sdk'
 import { createSupabaseServer } from '@/lib/supabaseServer'
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const GreekFilter = require('greek-swearword-filter')
+
+const greekFilter = new GreekFilter()
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,80 +16,104 @@ export async function POST(request: NextRequest) {
       agent_name?: string
     }
 
-    if (!text) {
-      return NextResponse.json({ error: 'No text provided' }, { status: 400 })
+    if (!text?.trim()) {
+      return NextResponse.json({ hasViolation: false })
     }
 
     const supabase = createSupabaseServer()
 
-    // Step 1: Fetch ban_words from Supabase dynamically
-    const { data: banWordsData } = await supabase.from('ban_words').select('word, severity')
-    const forbiddenWords = banWordsData ?? []
+    // ── 1. Custom Ban Words from Supabase ──────────────────────────────────
+    const { data: banData } = await supabase.from('ban_words').select('word, severity')
+    const customBanWords = banData ?? []
+    const foundCustom: { word: string; severity: string }[] = []
 
-    // Step 2: Rule-based check (case-insensitive)
-    const lowerText = text.toLowerCase()
-    const foundWords: string[] = []
-    let highestSeverity = 'medium'
-
-    for (const bw of forbiddenWords) {
-      if (lowerText.includes(bw.word.toLowerCase())) {
-        foundWords.push(bw.word)
-        if (bw.severity === 'high') highestSeverity = 'high'
-        else if (bw.severity === 'low' && highestSeverity !== 'high') highestSeverity = 'low'
+    for (const ban of customBanWords) {
+      if (text.toLowerCase().includes(ban.word.toLowerCase())) {
+        foundCustom.push(ban)
       }
     }
 
-    if (foundWords.length > 0) {
-      if (call_id) {
-        await supabase.from('violations').insert({
-          call_id,
-          agent_name: agent_name ?? 'Unknown',
-          text,
-          reason: `Απαγορευμένες λέξεις: "${foundWords.join(', ')}"`,
-          severity: highestSeverity,
-        })
-      }
-      return NextResponse.json({
-        hasViolation: true,
-        foundWords,
-        aiReason: `Απαγορευμένες λέξεις: ${foundWords.join(', ')}`,
+    // ── 2. Greek Profanity Library — detection only, never censor ──────────
+    const filteredText: string = greekFilter.filter(text)
+    const hasLibraryProfanity = filteredText !== text
+
+    // Extract which specific words were flagged by comparing word arrays
+    const detectedProfanity: string[] = []
+    if (hasLibraryProfanity) {
+      const originalWords = text.split(/\s+/)
+      const filteredWords = filteredText.split(/\s+/)
+      originalWords.forEach((word, i) => {
+        if (filteredWords[i] !== word) {
+          detectedProfanity.push(word)
+        }
       })
     }
 
-    // Step 3: AI check with Llama Prompt Guard
-    const groq = new Groq({ apiKey: process.env.GROQ_API_KEY })
-    const prompt = `You are a compliance monitor for a Greek call center. Analyze the following agent speech for policy violations such as threats, insults, discriminatory language, false promises, or pressure tactics.
+    // ── 3. AI check with Prompt Guard (context & variations) ───────────────
+    let aiReason: string | null = null
+    let aiViolation = false
 
-Agent said: "${text}"
+    try {
+      const aiCheck = await groq.chat.completions.create({
+        model: 'meta-llama/llama-prompt-guard-2-86m',
+        messages: [
+          {
+            role: 'user',
+            content: `Έλεγξε αν το παρακάτω κείμενο από agent τηλεφωνικού κέντρου είναι ακατάλληλο, προσβλητικό ή επαγγελματικά απαράδεκτο. Απάντησε ΜΟΝΟ με JSON: {"violation": true/false, "reason": "σύντομη αιτία ή null"}\n\nΚείμενο: "${text}"`,
+          },
+        ],
+        temperature: 0,
+        max_tokens: 80,
+      })
 
-Respond ONLY with valid JSON:
-{"violation": true/false, "reason": "explanation or null", "severity": "low|medium|high"}`
+      const raw = aiCheck.choices[0]?.message?.content ?? '{}'
+      const match = raw.match(/\{[^}]+\}/)
+      if (match) {
+        const parsed = JSON.parse(match[0])
+        aiViolation = parsed.violation ?? false
+        aiReason = parsed.reason ?? null
+      }
+    } catch {
+      // AI check is best-effort; never block on failure
+    }
 
-    const completion = await groq.chat.completions.create({
-      model: 'meta-llama/llama-prompt-guard-2-86m',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0,
-      max_tokens: 150,
-    })
+    // ── 4. Aggregate result ────────────────────────────────────────────────
+    const hasViolation = foundCustom.length > 0 || hasLibraryProfanity || aiViolation
 
-    const raw = completion.choices[0]?.message?.content ?? '{}'
-    const jsonMatch = raw.match(/\{[\s\S]*\}/)
-    const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { violation: false }
+    // ── 5. Save to Supabase with ORIGINAL uncensored text ──────────────────
+    if (hasViolation && call_id) {
+      const severity =
+        foundCustom.find((w) => w.severity === 'high') || hasLibraryProfanity
+          ? 'high'
+          : aiViolation
+          ? 'medium'
+          : 'low'
 
-    if (result.violation && call_id) {
+      const reasonParts = [
+        foundCustom.length > 0
+          ? `Custom ban words: ${foundCustom.map((w) => w.word).join(', ')}`
+          : null,
+        detectedProfanity.length > 0
+          ? `Profanity: ${detectedProfanity.join(', ')}`
+          : null,
+        aiReason ? `AI: ${aiReason}` : null,
+      ].filter(Boolean)
+
       await supabase.from('violations').insert({
         call_id,
         agent_name: agent_name ?? 'Unknown',
-        text,
-        reason: result.reason ?? null,
-        severity: result.severity ?? 'medium',
+        text, // always original — never censored
+        reason: reasonParts.join(' | ') || null,
+        severity,
       })
     }
 
     return NextResponse.json({
-      hasViolation: result.violation ?? false,
-      foundWords: [],
-      aiReason: result.reason ?? null,
+      hasViolation,
+      foundWords: foundCustom.map((w) => w.word),
+      detectedProfanity,
+      aiReason,
+      originalText: text,
     })
   } catch (error) {
     console.error('Check-words error:', error)

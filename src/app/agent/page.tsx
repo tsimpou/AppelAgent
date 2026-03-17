@@ -146,7 +146,18 @@ export default function AgentPage() {
           setTimeout(() => setViolationAlert(false), 5000)
           violationCountRef.current += 1
           setViolationCount(violationCountRef.current)
-          setViolationLogs((prev) => [checkData.aiReason ?? 'Παράβαση πολιτικής', ...prev.slice(0, 2)])
+
+          // Build a descriptive log entry from all detection sources
+          const allWords = [
+            ...(checkData.foundWords ?? []),
+            ...(checkData.detectedProfanity ?? []),
+          ]
+          const logMsg =
+            allWords.length > 0
+              ? `"${allWords.join('", "')}"${checkData.aiReason ? ` — ${checkData.aiReason}` : ''}`
+              : checkData.aiReason ?? 'Παράβαση πολιτικής'
+
+          setViolationLogs((prev) => [logMsg, ...prev.slice(0, 2)])
         }
       } catch (err) {
         console.error('processAudioChunk error:', err)
