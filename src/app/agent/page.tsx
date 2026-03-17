@@ -3,6 +3,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { Phone, PhoneOff, AlertTriangle, Lightbulb, User } from 'lucide-react'
 import { startMicroSIPCapture, stopCapture, type CaptureResult } from '@/lib/audioCapture'
+import { CallDetector } from '@/lib/callDetector'
+
+type CallStatus = 'idle' | 'standby' | 'active'
 
 type TranscriptEntry = {
   speaker: 'agent' | 'customer'
@@ -11,7 +14,7 @@ type TranscriptEntry = {
 }
 
 export default function AgentPage() {
-  const [isCallActive, setIsCallActive] = useState(false)
+  const [callStatus, setCallStatus] = useState<CallStatus>('idle')
   const [isRecording, setIsRecording] = useState(false)
   const [agentName, setAgentName] = useState('')
   const [callId, setCallId] = useState<string | null>(null)
@@ -40,6 +43,7 @@ export default function AgentPage() {
   const agentNameRef = useRef('')
   const violationCountRef = useRef(0)
   const transcriptRef = useRef<TranscriptEntry[]>([])
+  const detectorRef = useRef<CallDetector | null>(null)
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -184,27 +188,21 @@ export default function AgentPage() {
     [processAudioChunk]
   )
 
+  // Called automatically by CallDetector when audio is detected
   const startCall = async () => {
-    if (!agentName.trim()) {
-      alert('Παρακαλώ εισάγετε το όνομά σας.')
-      return
-    }
     try {
       const res = await fetch('/api/calls/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_name: agentName.trim() }),
+        body: JSON.stringify({ agent_name: agentNameRef.current }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
 
       callIdRef.current = data.call_id
-      agentNameRef.current = agentName.trim()
       violationCountRef.current = 0
-      isCallActiveRef.current = true
 
       setCallId(data.call_id)
-      setIsCallActive(true)
       setTranscript([])
       setSuggestions([])
       setViolationLogs([])
@@ -224,13 +222,15 @@ export default function AgentPage() {
     } catch (err) {
       console.error('startCall error:', err)
       isCallActiveRef.current = false
-      setIsCallActive(false)
+      setCallStatus('idle')
       alert('Αδυναμία έναρξης κλήσης. Ελέγξτε τα δικαιώματα μικροφώνου.')
     }
   }
 
   const endCall = useCallback(async () => {
     isCallActiveRef.current = false
+    detectorRef.current?.stop()
+    detectorRef.current = null
 
     if (recordingTimeoutRef.current) clearTimeout(recordingTimeoutRef.current)
     if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop()
@@ -259,10 +259,56 @@ export default function AgentPage() {
       console.error('endCall error:', err)
     }
 
-    setIsCallActive(false)
+    setCallStatus('idle')
     setIsRecording(false)
     callIdRef.current = null
   }, [])
+
+  // ── 3-state standby / auto-detect logic ─────────────────────────────
+  const enterStandby = async () => {
+    if (!agentName.trim()) {
+      alert('Παρακαλώ εισάγετε το όνομά σας.')
+      return
+    }
+    agentNameRef.current = agentName.trim()
+    setCallStatus('standby')
+
+    const detector = new CallDetector()
+    detectorRef.current = detector
+
+    try {
+      await detector.startListening(
+        async () => {
+          // Audio detected on VB-Cable → auto-start
+          detector.stop()
+          isCallActiveRef.current = true
+          setCallStatus('active')
+          await startCall()
+        },
+        async () => {
+          // 8 s silence → auto-end
+          await endCall()
+        },
+      )
+    } catch (err) {
+      console.error('enterStandby error:', err)
+      detector.stop()
+      detectorRef.current = null
+      setCallStatus('idle')
+    }
+  }
+
+  const exitStandby = () => {
+    detectorRef.current?.stop()
+    detectorRef.current = null
+    setCallStatus('idle')
+  }
+
+  const handleButtonClick = async () => {
+    if (callStatus === 'idle') await enterStandby()
+    else if (callStatus === 'standby') exitStandby()
+    else await endCall()
+  }
 
   const formatTime = (secs: number) => {
     const m = Math.floor(secs / 60).toString().padStart(2, '0')
@@ -303,12 +349,12 @@ export default function AgentPage() {
               placeholder="Όνομα agent..."
               value={agentName}
               onChange={(e) => setAgentName(e.target.value)}
-              disabled={isCallActive}
+              disabled={callStatus !== 'idle'}
               className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-1.5 text-sm w-44 focus:outline-none focus:border-blue-500 disabled:opacity-50"
             />
           </div>
 
-          {isCallActive && (
+          {callStatus === 'active' && (
             <div className="flex items-center gap-2 ml-auto">
               {isRecording && (
                 <span className="flex items-center gap-1 text-xs text-red-400">
@@ -327,27 +373,39 @@ export default function AgentPage() {
             </div>
           )}
 
-          <div className={isCallActive ? '' : 'ml-auto'}>
-            {!isCallActive ? (
-              <button
-                onClick={startCall}
-                disabled={!agentName.trim()}
-                className="flex items-center gap-2 bg-green-600 hover:bg-green-700 disabled:opacity-40 px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
-              >
-                <Phone className="w-4 h-4" />
-                Έναρξη Κλήσης
-              </button>
-            ) : (
-              <button
-                onClick={endCall}
-                className="flex items-center gap-2 bg-red-600 hover:bg-red-700 px-4 py-2 rounded-lg font-semibold text-sm transition-colors"
-              >
-                <PhoneOff className="w-4 h-4" />
-                Τέλος Κλήσης
-              </button>
-            )}
+          <div className={callStatus === 'active' ? '' : 'ml-auto'}>
+            <button
+              onClick={handleButtonClick}
+              disabled={callStatus === 'idle' && !agentName.trim()}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg font-semibold text-sm transition-all disabled:opacity-40 ${
+                callStatus === 'idle'
+                  ? 'bg-green-600 hover:bg-green-700'
+                  : callStatus === 'standby'
+                  ? 'bg-yellow-600 hover:bg-yellow-700'
+                  : 'bg-red-600 hover:bg-red-700'
+              }`}
+            >
+              {callStatus === 'idle' && <Phone className="w-4 h-4" />}
+              {callStatus === 'standby' && (
+                <span className="w-3 h-3 bg-yellow-300 rounded-full animate-pulse" />
+              )}
+              {callStatus === 'active' && <PhoneOff className="w-4 h-4" />}
+              {callStatus === 'idle'
+                ? 'Έναρξη Κλήσης'
+                : callStatus === 'standby'
+                ? 'Σε Αναμονή...'
+                : 'Τέλος Κλήσης'}
+            </button>
           </div>
         </div>
+
+        {/* Status bar */}
+        {callStatus === 'standby' && (
+          <div className="flex items-center gap-2 text-yellow-400 text-sm mb-3 bg-yellow-900/20 border border-yellow-800/40 px-4 py-2.5 rounded-lg">
+            <span className="w-2 h-2 bg-yellow-400 rounded-full animate-ping" />
+            Περιμένω κλήση από MicroSIP... · Κλικ στο κουμπί για ακύρωση
+          </div>
+        )}
 
         {/* Device info bar */}
         {deviceLabels && (
@@ -358,7 +416,7 @@ export default function AgentPage() {
         )}
 
         {/* Final score banner */}
-        {finalScore !== null && !isCallActive && (
+        {finalScore !== null && callStatus === 'idle' && (
           <div
             className={`rounded-xl p-3 mb-3 text-center font-bold text-lg ${scoreBadge(finalScore).cls}`}
           >
@@ -382,8 +440,10 @@ export default function AgentPage() {
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               {transcript.length === 0 && (
                 <p className="text-gray-600 text-sm text-center mt-16">
-                  {isCallActive
+                  {callStatus === 'active'
                     ? 'Μικρόφωνο ενεργό — μιλάτε...'
+                    : callStatus === 'standby'
+                    ? 'Αναμονή ανίχνευσης κλήσης από MicroSIP...'
                     : 'Ξεκινήστε κλήση για να δείτε τη συνομιλία.'}
                 </p>
               )}
@@ -444,7 +504,7 @@ export default function AgentPage() {
                 )}
                 {!isStreaming && suggestions.length === 0 && (
                   <p className="text-gray-600 text-xs text-center mt-10">
-                    {isCallActive ? 'Αναμονή πρώτης ομιλίας...' : 'Ξεκινήστε κλήση.'}
+                    {callStatus === 'active' ? 'Αναμονή πρώτης ομιλίας...' : 'Ξεκινήστε κλήση.'}
                   </p>
                 )}
                 {!isStreaming &&
