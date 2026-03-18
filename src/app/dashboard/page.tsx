@@ -5,9 +5,10 @@ import {
   RefreshCw, PhoneCall, AlertTriangle, Users, Plus, Trash2,
   ChevronDown, ChevronUp, Upload, Trophy,
   Headphones, LayoutDashboard, CalendarDays, ShieldAlert,
-  ExternalLink, Bot, Sparkles, X,
+  ExternalLink, Bot, Sparkles, X, Radio,
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import LiveWallboardTab from '@/components/LiveWallboardTab'
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface Call {
@@ -64,7 +65,7 @@ interface VicidialAgent {
   active: boolean
 }
 
-type TabId = 'overview' | 'briefing' | 'banwords' | 'violations' | 'calls' | 'leaderboard' | 'agents'
+type TabId = 'overview' | 'briefing' | 'banwords' | 'violations' | 'calls' | 'leaderboard' | 'agents' | 'live'
 
 // ── Helpers ────────────────────────────────────────────────────────────
 function ScoreBadge({ score }: { score: number }) {
@@ -502,6 +503,7 @@ export default function DashboardPage() {
             { id: 'calls',       icon: PhoneCall,       label: 'Κλήσεις' },
             { id: 'leaderboard', icon: Trophy,          label: 'Leaderboard' },
             { id: 'agents',      icon: Users,           label: 'Agents' },
+            { id: 'live',        icon: Radio,           label: 'Live Wallboard' },
           ].map(({ id, icon: Icon, label }) => (
             <button
               key={id}
@@ -512,7 +514,7 @@ export default function DashboardPage() {
                   : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800/50'
               }`}
             >
-              <Icon className="w-4 h-4 shrink-0" />
+              <Icon className={`w-4 h-4 shrink-0 ${id === 'live' ? 'text-red-400' : ''}`} />
               {label}
               {id === 'violations' && violationsToday.length > 0 && (
                 <span className="ml-auto bg-red-500/20 text-red-400 text-[10px] font-bold px-1.5 py-0.5 rounded-full">
@@ -547,6 +549,7 @@ export default function DashboardPage() {
             {activeTab === 'calls' && 'Ιστορικό Κλήσεων'}
             {activeTab === 'leaderboard' && 'Leaderboard'}
             {activeTab === 'agents' && 'Agents'}
+            {activeTab === 'live' && 'Live Wallboard'}
           </h1>
           <div className="flex-1" />
           {lastUpdated && (
@@ -562,6 +565,9 @@ export default function DashboardPage() {
         </div>
 
         <div className="p-8 flex-1">
+
+        {/* ── TAB 0: Live Wallboard ────────────────────────────────────── */}
+        {activeTab === 'live' && <LiveWallboardTab />}
 
         {/* ── TAB 1: Overview ──────────────────────────────────────────── */}
         {activeTab === 'overview' && (
