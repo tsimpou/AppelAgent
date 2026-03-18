@@ -1,8 +1,39 @@
 "use client";
-import { useState, useMemo } from "react";
-import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff, Ear, X } from "lucide-react";
+import { useState, useMemo, useEffect, useCallback } from "react";
+import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff, Ear, X, ChevronRight, Star, AlertTriangle, PhoneOff } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useLiveWallboard, type LiveAgent } from "@/hooks/useLiveWallboard";
+
+interface CallRecord {
+  id: string;
+  agent_name: string;
+  lead_id: string | null;
+  campaign_id: string | null;
+  started_at: string;
+  ended_at: string | null;
+  source: string | null;
+}
+
+interface FeedbackRecord {
+  id: string;
+  call_id: string;
+  score: number;
+  summary: string | null;
+  positives: string[];
+  improvements: string[];
+  has_violation: boolean;
+  violation_reason: string | null;
+  created_at: string;
+}
+
+interface ViolationRecord {
+  id: string;
+  call_id: string;
+  text: string;
+  reason: string | null;
+  severity: string | null;
+  occurred_at: string;
+}
 
 const STATUS_CFG = {
   INCALL: {
@@ -42,6 +73,47 @@ export default function LiveWallboardTab() {
   const [agents, setAgents] = useState(rawAgents);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [monitoringAgent, setMonitoringAgent] = useState<string | null>(null);
+  const [selectedAgent, setSelectedAgent] = useState<LiveAgent | null>(null);
+  const [agentCalls, setAgentCalls] = useState<CallRecord[]>([]);
+  const [agentFeedback, setAgentFeedback] = useState<FeedbackRecord[]>([]);
+  const [agentViolations, setAgentViolations] = useState<ViolationRecord[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const fetchAgentDetails = useCallback(async (agentName: string) => {
+    setDetailLoading(true);
+    const today = new Date().toISOString().split("T")[0];
+    const [{ data: calls }, { data: feedback }, { data: violations }] = await Promise.all([
+      supabase
+        .from("calls")
+        .select("*")
+        .eq("agent_name", agentName)
+        .gte("started_at", today)
+        .order("started_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("call_feedback")
+        .select("*")
+        .eq("agent_name", agentName)
+        .gte("created_at", today)
+        .order("created_at", { ascending: false })
+        .limit(50),
+      supabase
+        .from("violations")
+        .select("*")
+        .eq("agent_name", agentName)
+        .gte("occurred_at", today)
+        .order("occurred_at", { ascending: false })
+        .limit(50),
+    ]);
+    setAgentCalls(calls ?? []);
+    setAgentFeedback(feedback ?? []);
+    setAgentViolations(violations ?? []);
+    setDetailLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (selectedAgent) fetchAgentDetails(selectedAgent.full_name);
+  }, [selectedAgent, fetchAgentDetails]);
 
   async function handleListen(agent: LiveAgent) {
     try {
@@ -397,7 +469,12 @@ export default function LiveWallboardTab() {
               return (
                 <tr
                   key={agent.user_vicidial}
-                  className="hover:bg-zinc-800/20 transition-colors"
+                  onClick={() => setSelectedAgent(agent)}
+                  className={`hover:bg-zinc-800/30 transition-colors cursor-pointer ${
+                    selectedAgent?.user_vicidial === agent.user_vicidial
+                      ? "bg-indigo-500/5 border-l-2 border-l-indigo-500"
+                      : ""
+                  }`}
                 >
                   {/* Status */}
                   <td className="py-3 px-4">
@@ -490,7 +567,7 @@ export default function LiveWallboardTab() {
                   <td className="py-3 px-4 text-center">
                     <div className="flex flex-col items-center gap-1">
                       <button
-                        onClick={() => toggleMonitor(agent.user_vicidial, agent.monitored ?? false)}
+                        onClick={(e) => { e.stopPropagation(); toggleMonitor(agent.user_vicidial, agent.monitored ?? false); }}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
                           agent.monitored ? "bg-indigo-600" : "bg-zinc-700 hover:bg-zinc-600"
                         }`}
@@ -508,7 +585,7 @@ export default function LiveWallboardTab() {
                   <td className="py-3 px-4 text-center">
                     {agent.status === "INCALL" ? (
                       <button
-                        onClick={() => handleListen(agent)}
+                        onClick={(e) => { e.stopPropagation(); handleListen(agent); }}
                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-600/20 transition-all"
                       >
                         <Ear className="w-3.5 h-3.5" />
@@ -531,6 +608,162 @@ export default function LiveWallboardTab() {
           </div>
         )}
       </div>
+
+      {/* Agent Detail Panel */}
+      {selectedAgent && (
+        <div className="fixed inset-y-0 right-0 z-40 flex">
+          {/* Backdrop */}
+          <div
+            className="fixed inset-0 bg-black/40 backdrop-blur-sm"
+            onClick={() => setSelectedAgent(null)}
+          />
+          {/* Panel */}
+          <div className="relative ml-auto w-[420px] bg-zinc-950 border-l border-zinc-800 flex flex-col shadow-2xl overflow-hidden">
+            {/* Panel header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-indigo-600/20 rounded-xl flex items-center justify-center text-sm font-bold text-indigo-400">
+                  {(selectedAgent.full_name || selectedAgent.user_vicidial).charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-white">{selectedAgent.full_name || selectedAgent.user_vicidial}</p>
+                  <p className="text-[10px] text-zinc-500">@{selectedAgent.user_vicidial} · {selectedAgent.campaign_name}</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedAgent(null)} className="text-zinc-500 hover:text-white transition-colors">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+              {detailLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                <>
+                  {/* Summary stats */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                      <p className="text-2xl font-bold text-white">{agentCalls.length}</p>
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Κλήσεις</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                      <p className="text-2xl font-bold text-green-400">
+                        {agentFeedback.length > 0
+                          ? Math.round(agentFeedback.reduce((s, f) => s + f.score, 0) / agentFeedback.length)
+                          : "—"}
+                      </p>
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Avg Score</p>
+                    </div>
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                      <p className={`text-2xl font-bold ${agentViolations.length > 0 ? "text-red-400" : "text-zinc-400"}`}>
+                        {agentViolations.length}
+                      </p>
+                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Παραβάσεις</p>
+                    </div>
+                  </div>
+
+                  {/* Calls list */}
+                  <div>
+                    <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Κλήσεις Σήμερα</p>
+                    {agentCalls.length === 0 ? (
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl py-6 text-center">
+                        <PhoneOff className="w-5 h-5 text-zinc-700 mx-auto mb-2" />
+                        <p className="text-xs text-zinc-600">Δεν βρέθηκαν κλήσεις σήμερα</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {agentCalls.map((call) => {
+                          const fb = agentFeedback.find((f) => f.call_id === call.id);
+                          const durationSec = call.ended_at
+                            ? Math.round((new Date(call.ended_at).getTime() - new Date(call.started_at).getTime()) / 1000)
+                            : null;
+                          return (
+                            <div key={call.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 flex items-start gap-3">
+                              <div className="w-7 h-7 bg-zinc-800 rounded-lg flex items-center justify-center shrink-0 mt-0.5">
+                                <Phone className="w-3.5 h-3.5 text-zinc-400" />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-2">
+                                  <p className="text-xs text-zinc-300 font-medium">
+                                    {new Date(call.started_at).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit" })}
+                                    {durationSec !== null && (
+                                      <span className="ml-1.5 text-zinc-600">· {Math.floor(durationSec / 60)}:{String(durationSec % 60).padStart(2, "0")}</span>
+                                    )}
+                                  </p>
+                                  {fb && (
+                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
+                                      fb.score >= 80 ? "bg-green-500/10 text-green-400" :
+                                      fb.score >= 60 ? "bg-yellow-500/10 text-yellow-400" :
+                                      "bg-red-500/10 text-red-400"
+                                    }`}>
+                                      {fb.score}
+                                    </span>
+                                  )}
+                                </div>
+                                {fb?.summary && (
+                                  <p className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{fb.summary}</p>
+                                )}
+                                {call.lead_id && (
+                                  <p className="text-[10px] text-zinc-600 mt-0.5">Lead #{call.lead_id}</p>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Violations */}
+                  {agentViolations.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Παραβάσεις Σήμερα</p>
+                      <div className="space-y-2">
+                        {agentViolations.map((v) => (
+                          <div key={v.id} className="bg-red-500/5 border border-red-500/20 rounded-xl p-3 flex gap-2.5">
+                            <AlertTriangle className="w-3.5 h-3.5 text-red-400 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <p className="text-xs text-red-300">{v.text}</p>
+                              {v.reason && <p className="text-[10px] text-red-500/70 mt-0.5">{v.reason}</p>}
+                              <p className="text-[10px] text-zinc-600 mt-0.5">
+                                {new Date(v.occurred_at).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit" })}
+                                {v.severity && <span className="ml-1.5 capitalize">{v.severity}</span>}
+                              </p>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Latest QA feedback */}
+                  {agentFeedback.length > 0 && agentFeedback[0].positives?.length > 0 && (
+                    <div>
+                      <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Τελευταίο QA Feedback</p>
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 space-y-2">
+                        {agentFeedback[0].positives.slice(0, 3).map((p, i) => (
+                          <div key={i} className="flex gap-2 text-xs">
+                            <Star className="w-3 h-3 text-green-400 shrink-0 mt-0.5" />
+                            <span className="text-zinc-300">{p}</span>
+                          </div>
+                        ))}
+                        {agentFeedback[0].improvements.slice(0, 2).map((imp, i) => (
+                          <div key={i} className="flex gap-2 text-xs">
+                            <ChevronRight className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" />
+                            <span className="text-zinc-400">{imp}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Monitoring toast */}
       {monitoringAgent && (
