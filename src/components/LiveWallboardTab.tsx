@@ -1,30 +1,8 @@
 "use client";
 import { useState, useMemo, useEffect, useCallback } from "react";
-import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff, Ear, X, ChevronRight, Star, AlertTriangle, PhoneOff } from "lucide-react";
+import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff, Ear, X, AlertTriangle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useLiveWallboard, type LiveAgent } from "@/hooks/useLiveWallboard";
-
-interface CallRecord {
-  id: string;
-  agent_name: string;
-  lead_id: string | null;
-  campaign_id: string | null;
-  started_at: string;
-  ended_at: string | null;
-  source: string | null;
-}
-
-interface FeedbackRecord {
-  id: string;
-  call_id: string;
-  score: number;
-  summary: string | null;
-  positives: string[];
-  improvements: string[];
-  has_violation: boolean;
-  violation_reason: string | null;
-  created_at: string;
-}
 
 interface ViolationRecord {
   id: string;
@@ -74,46 +52,24 @@ export default function LiveWallboardTab() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [monitoringAgent, setMonitoringAgent] = useState<string | null>(null);
   const [selectedAgent, setSelectedAgent] = useState<LiveAgent | null>(null);
-  const [agentCalls, setAgentCalls] = useState<CallRecord[]>([]);
-  const [agentFeedback, setAgentFeedback] = useState<FeedbackRecord[]>([]);
   const [agentViolations, setAgentViolations] = useState<ViolationRecord[]>([]);
-  const [detailLoading, setDetailLoading] = useState(false);
 
-  const fetchAgentDetails = useCallback(async (agentName: string) => {
-    setDetailLoading(true);
+  const fetchAgentViolations = useCallback(async (agentName: string) => {
     const today = new Date().toISOString().split("T")[0];
-    const [{ data: calls }, { data: feedback }, { data: violations }] = await Promise.all([
-      supabase
-        .from("calls")
-        .select("*")
-        .eq("agent_name", agentName)
-        .gte("started_at", today)
-        .order("started_at", { ascending: false })
-        .limit(50),
-      supabase
-        .from("call_feedback")
-        .select("*")
-        .eq("agent_name", agentName)
-        .gte("created_at", today)
-        .order("created_at", { ascending: false })
-        .limit(50),
-      supabase
-        .from("violations")
-        .select("*")
-        .eq("agent_name", agentName)
-        .gte("occurred_at", today)
-        .order("occurred_at", { ascending: false })
-        .limit(50),
-    ]);
-    setAgentCalls(calls ?? []);
-    setAgentFeedback(feedback ?? []);
-    setAgentViolations(violations ?? []);
-    setDetailLoading(false);
+    const { data } = await supabase
+      .from("violations")
+      .select("*")
+      .eq("agent_name", agentName)
+      .gte("occurred_at", today)
+      .order("occurred_at", { ascending: false })
+      .limit(50);
+    setAgentViolations(data ?? []);
   }, []);
 
   useEffect(() => {
-    if (selectedAgent) fetchAgentDetails(selectedAgent.full_name);
-  }, [selectedAgent, fetchAgentDetails]);
+    if (selectedAgent) fetchAgentViolations(selectedAgent.full_name);
+    else setAgentViolations([]);
+  }, [selectedAgent, fetchAgentViolations]);
 
   async function handleListen(agent: LiveAgent) {
     try {
@@ -626,8 +582,14 @@ export default function LiveWallboardTab() {
                   {(selectedAgent.full_name || selectedAgent.user_vicidial).charAt(0).toUpperCase()}
                 </div>
                 <div>
-                  <p className="text-sm font-semibold text-white">{selectedAgent.full_name || selectedAgent.user_vicidial}</p>
-                  <p className="text-[10px] text-zinc-500">@{selectedAgent.user_vicidial} · {selectedAgent.campaign_name}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-white">{selectedAgent.full_name || selectedAgent.user_vicidial}</p>
+                    <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${getStatusCfg(selectedAgent.status).badge}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${getStatusCfg(selectedAgent.status).dot} ${selectedAgent.status === "INCALL" ? "animate-pulse" : ""}`} />
+                      {getStatusCfg(selectedAgent.status).label}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 mt-0.5">@{selectedAgent.user_vicidial} · {selectedAgent.campaign_name}</p>
                 </div>
               </div>
               <button onClick={() => setSelectedAgent(null)} className="text-zinc-500 hover:text-white transition-colors">
@@ -636,87 +598,70 @@ export default function LiveWallboardTab() {
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-5">
-              {detailLoading ? (
-                <div className="flex items-center justify-center py-16">
-                  <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-                </div>
-              ) : (
-                <>
-                  {/* Summary stats */}
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
-                      <p className="text-2xl font-bold text-white">{agentCalls.length}</p>
-                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Κλήσεις</p>
-                    </div>
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
-                      <p className="text-2xl font-bold text-green-400">
-                        {agentFeedback.length > 0
-                          ? Math.round(agentFeedback.reduce((s, f) => s + f.score, 0) / agentFeedback.length)
-                          : "—"}
-                      </p>
-                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Avg Score</p>
-                    </div>
-                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
-                      <p className={`text-2xl font-bold ${agentViolations.length > 0 ? "text-red-400" : "text-zinc-400"}`}>
-                        {agentViolations.length}
-                      </p>
-                      <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Παραβάσεις</p>
-                    </div>
-                  </div>
-
-                  {/* Calls list */}
-                  <div>
-                    <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Κλήσεις Σήμερα</p>
-                    {agentCalls.length === 0 ? (
-                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl py-6 text-center">
-                        <PhoneOff className="w-5 h-5 text-zinc-700 mx-auto mb-2" />
-                        <p className="text-xs text-zinc-600">Δεν βρέθηκαν κλήσεις σήμερα</p>
+              {(() => {
+                const sc = getStatusCfg(selectedAgent.status);
+                return (
+                  <>
+                    {/* Summary stats from live_agents */}
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className="text-2xl font-bold text-white">{selectedAgent.calls_today}</p>
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Κλήσεις</p>
                       </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {agentCalls.map((call) => {
-                          const fb = agentFeedback.find((f) => f.call_id === call.id);
-                          const durationSec = call.ended_at
-                            ? Math.round((new Date(call.ended_at).getTime() - new Date(call.started_at).getTime()) / 1000)
-                            : null;
-                          return (
-                            <div key={call.id} className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 flex items-start gap-3">
-                              <div className="w-7 h-7 bg-zinc-800 rounded-lg flex items-center justify-center shrink-0 mt-0.5">
-                                <Phone className="w-3.5 h-3.5 text-zinc-400" />
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between gap-2">
-                                  <p className="text-xs text-zinc-300 font-medium">
-                                    {new Date(call.started_at).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit" })}
-                                    {durationSec !== null && (
-                                      <span className="ml-1.5 text-zinc-600">· {Math.floor(durationSec / 60)}:{String(durationSec % 60).padStart(2, "0")}</span>
-                                    )}
-                                  </p>
-                                  {fb && (
-                                    <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-md ${
-                                      fb.score >= 80 ? "bg-green-500/10 text-green-400" :
-                                      fb.score >= 60 ? "bg-yellow-500/10 text-yellow-400" :
-                                      "bg-red-500/10 text-red-400"
-                                    }`}>
-                                      {fb.score}
-                                    </span>
-                                  )}
-                                </div>
-                                {fb?.summary && (
-                                  <p className="text-[11px] text-zinc-500 mt-0.5 line-clamp-2">{fb.summary}</p>
-                                )}
-                                {call.lead_id && (
-                                  <p className="text-[10px] text-zinc-600 mt-0.5">Lead #{call.lead_id}</p>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${sc.badge}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                          {sc.label}
+                        </span>
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-1.5">Status</p>
+                      </div>
+                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-center">
+                        <p className={`text-2xl font-bold ${agentViolations.length > 0 ? "text-red-400" : "text-zinc-400"}`}>
+                          {agentViolations.length}
+                        </p>
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mt-0.5">Παραβάσεις</p>
+                      </div>
+                    </div>
+
+                    {/* Campaign info */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4 flex items-center gap-3">
+                      <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center shrink-0">
+                        <Phone className="w-4 h-4 text-zinc-400" />
+                      </div>
+                      <div>
+                        <p className="text-xs font-medium text-zinc-300">{selectedAgent.campaign_name}</p>
+                        <p className="text-[10px] text-zinc-600">Campaign #{selectedAgent.campaign_id}</p>
+                      </div>
+                      {selectedAgent.lead_id && selectedAgent.lead_id !== "0" && (
+                        <a
+                          href={`http://10.1.0.21/vicidial/admin_modify_lead.php?lead_id=${encodeURIComponent(selectedAgent.lead_id)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-auto text-indigo-400 hover:text-indigo-300 text-xs font-mono underline underline-offset-2"
+                        >
+                          Lead #{selectedAgent.lead_id}
+                        </a>
+                      )}
+                    </div>
+
+                    {/* Current call info (if INCALL) */}
+                    {selectedAgent.status === "INCALL" && (
+                      <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 space-y-1">
+                        <p className="text-[10px] font-medium uppercase tracking-widest text-red-400 mb-2">Τρέχουσα Κλήση</p>
+                        {(selectedAgent.lead_first_name || selectedAgent.lead_last_name) && (
+                          <p className="text-sm text-white font-medium">
+                            {[selectedAgent.lead_first_name, selectedAgent.lead_last_name].filter(Boolean).join(" ")}
+                          </p>
+                        )}
+                        {(selectedAgent.phone_number || selectedAgent.callerid) && (
+                          <p className="text-xs text-zinc-400 font-mono">
+                            {selectedAgent.phone_number ?? selectedAgent.callerid?.slice(-10)}
+                          </p>
+                        )}
                       </div>
                     )}
-                  </div>
 
-                  {/* Violations */}
+                    {/* Violations */}
                   {agentViolations.length > 0 && (
                     <div>
                       <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Παραβάσεις Σήμερα</p>
@@ -737,29 +682,9 @@ export default function LiveWallboardTab() {
                       </div>
                     </div>
                   )}
-
-                  {/* Latest QA feedback */}
-                  {agentFeedback.length > 0 && agentFeedback[0].positives?.length > 0 && (
-                    <div>
-                      <p className="text-[10px] font-medium uppercase tracking-widest text-zinc-500 mb-2">Τελευταίο QA Feedback</p>
-                      <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-3 space-y-2">
-                        {agentFeedback[0].positives.slice(0, 3).map((p, i) => (
-                          <div key={i} className="flex gap-2 text-xs">
-                            <Star className="w-3 h-3 text-green-400 shrink-0 mt-0.5" />
-                            <span className="text-zinc-300">{p}</span>
-                          </div>
-                        ))}
-                        {agentFeedback[0].improvements.slice(0, 2).map((imp, i) => (
-                          <div key={i} className="flex gap-2 text-xs">
-                            <ChevronRight className="w-3 h-3 text-yellow-400 shrink-0 mt-0.5" />
-                            <span className="text-zinc-400">{imp}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </>
-              )}
+                );
+              })()}
             </div>
           </div>
         </div>
