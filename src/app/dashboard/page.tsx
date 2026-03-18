@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import LiveWallboardTab from '@/components/LiveWallboardTab'
+import { useLiveWallboard, type LiveAgent as LiveAgentWallboard } from '@/hooks/useLiveWallboard'
 
 // ── Types ──────────────────────────────────────────────────────────────
 interface Call {
@@ -153,6 +154,9 @@ export default function DashboardPage() {
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null)
   const [isCoachingStreaming, setIsCoachingStreaming] = useState(false)
   const [coachingText, setCoachingText] = useState('')
+
+  // ── Live Wallboard data (shared across tabs) ────────────────────────
+  const { agents: liveAgents, groupStats: liveGroupStats } = useLiveWallboard()
 
   // ── Data fetching ────────────────────────────────────────────────────
   const fetchCalls = useCallback(async () => {
