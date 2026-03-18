@@ -18,6 +18,7 @@ export interface LiveAgent {
   lead_status: string | null;
   called_count: number | null;
   updated_at: string;
+  monitored?: boolean;
 }
 
 export interface GroupStats {

@@ -1,6 +1,7 @@
 "use client";
 import { useState, useMemo } from "react";
-import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search } from "lucide-react";
+import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff } from "lucide-react";
+import { supabase } from "@/lib/supabase";
 import { useLiveWallboard } from "@/hooks/useLiveWallboard";
 
 const STATUS_CFG = {
@@ -37,8 +38,34 @@ function getStatusCfg(s: string) {
 }
 
 export default function LiveWallboardTab() {
-  const { agents, groupStats, campaigns, lastUpdated } = useLiveWallboard();
+  const { agents: rawAgents, groupStats, campaigns, lastUpdated } = useLiveWallboard();
+  const [agents, setAgents] = useState(rawAgents);
   const [statusFilter, setStatusFilter] = useState("ALL");
+
+  // Sync hook data into local state (preserves optimistic monitored toggles)
+  useMemo(() => {
+    setAgents(prev => rawAgents.map(a => ({
+      ...a,
+      monitored: prev.find(p => p.user_vicidial === a.user_vicidial)?.monitored ?? a.monitored,
+    })));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawAgents]);
+
+  async function toggleMonitor(username: string, current: boolean) {
+    setAgents(prev => prev.map(a =>
+      a.user_vicidial === username ? { ...a, monitored: !current } : a
+    ));
+    const { error } = await supabase
+      .from("live_agents")
+      .update({ monitored: !current })
+      .eq("user_vicidial", username);
+    if (error) {
+      setAgents(prev => prev.map(a =>
+        a.user_vicidial === username ? { ...a, monitored: current } : a
+      ));
+      console.error("Toggle error:", error.message);
+    }
+  }
   const [campaignFilter, setCampaignFilter] = useState("ALL");
   const [search, setSearch] = useState("");
 
@@ -117,6 +144,12 @@ export default function LiveWallboardTab() {
             icon: AlertCircle,
             color: "orange",
           },
+          {
+            label: "ΥΠΟ ΠΑΡΑΚΟΛΟΥΘΗΣΗ",
+            value: agents.filter(a => a.monitored).length,
+            icon: Eye,
+            color: "indigo",
+          },
         ].map(({ label, value, icon: Icon, color }) => (
           <div
             key={label}
@@ -135,6 +168,8 @@ export default function LiveWallboardTab() {
                   ? "text-yellow-400"
                   : color === "orange"
                   ? "text-orange-400"
+                  : color === "indigo"
+                  ? "text-indigo-400"
                   : "text-white"
               }`}
             >
@@ -227,6 +262,43 @@ export default function LiveWallboardTab() {
           ))}
         </select>
 
+        <div className="h-5 w-px bg-zinc-800" />
+
+        {/* Batch monitor buttons */}
+        <button
+          onClick={async () => {
+            const usernames = filtered.map(a => a.user_vicidial);
+            setAgents(prev => prev.map(a =>
+              usernames.includes(a.user_vicidial) ? { ...a, monitored: true } : a
+            ));
+            await supabase.from("live_agents")
+              .update({ monitored: true })
+              .in("user_vicidial", usernames);
+          }}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-600/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-600/20 transition-all flex items-center gap-1.5"
+        >
+          <Eye className="w-3.5 h-3.5" /> Monitor All
+        </button>
+
+        <button
+          onClick={async () => {
+            const usernames = filtered.map(a => a.user_vicidial);
+            setAgents(prev => prev.map(a =>
+              usernames.includes(a.user_vicidial) ? { ...a, monitored: false } : a
+            ));
+            await supabase.from("live_agents")
+              .update({ monitored: false })
+              .in("user_vicidial", usernames);
+          }}
+          className="px-3 py-1.5 rounded-lg text-xs font-medium bg-zinc-800 text-zinc-400 hover:text-white transition-all flex items-center gap-1.5"
+        >
+          <EyeOff className="w-3.5 h-3.5" /> Καθαρισμός
+        </button>
+
+        <span className="text-xs text-indigo-400 font-medium">
+          {agents.filter(a => a.monitored).length} monitored
+        </span>
+
         <div className="flex-1" />
 
         {/* Search */}
@@ -264,6 +336,9 @@ export default function LiveWallboardTab() {
                   {h}
                 </th>
               ))}
+              <th className="text-center py-3 px-4 text-[10px] font-medium uppercase tracking-widest text-zinc-500 w-28">
+                QA Monitor
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/40">
@@ -298,6 +373,11 @@ export default function LiveWallboardTab() {
                       <div>
                         <p className="text-zinc-200 font-medium text-xs">
                           {agent.full_name || agent.user_vicidial}
+                          {agent.monitored && (
+                            <span className="ml-1.5 text-[10px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.5 rounded-full">
+                              🎯
+                            </span>
+                          )}
                         </p>
                         <p className="text-zinc-600 text-[10px]">
                           @{agent.user_vicidial}
@@ -355,6 +435,24 @@ export default function LiveWallboardTab() {
                     ) : (
                       <span className="text-zinc-700 text-xs">—</span>
                     )}
+                  </td>
+                  {/* QA Monitor toggle */}
+                  <td className="py-3 px-4 text-center">
+                    <div className="flex flex-col items-center gap-1">
+                      <button
+                        onClick={() => toggleMonitor(agent.user_vicidial, agent.monitored ?? false)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors duration-200 focus:outline-none ${
+                          agent.monitored ? "bg-indigo-600" : "bg-zinc-700 hover:bg-zinc-600"
+                        }`}
+                      >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                          agent.monitored ? "translate-x-6" : "translate-x-1"
+                        }`} />
+                      </button>
+                      {agent.monitored && (
+                        <span className="text-[10px] text-indigo-400">🎯 Active</span>
+                      )}
+                    </div>
                   </td>
                 </tr>
               );
