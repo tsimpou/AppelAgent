@@ -45,22 +45,45 @@ export default function LiveWallboardTab() {
 
   async function handleListen(agent: LiveAgent) {
     try {
-      const res = await fetch("/api/monitor-agent", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id:  agent.session_id,
-          phone_login: agent.session_id,
-          server_ip:   "10.1.0.21",
-        }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setMonitoringAgent(agent.full_name);
-        setTimeout(() => setMonitoringAgent(null), 10000);
-      } else {
-        alert("Monitor error: " + data.response);
+      // Insert a monitor request into Supabase — the local bridge will pick it up
+      // and call VICIdial (Vercel cannot reach internal 10.1.0.21 directly)
+      const { data: req, error } = await supabase
+        .from("monitor_requests")
+        .insert({
+          session_id: agent.session_id,
+          full_name:  agent.full_name,
+          status:     "pending",
+        })
+        .select("id")
+        .single();
+
+      if (error) {
+        alert("Monitor error: " + error.message);
+        return;
       }
+
+      // Show toast immediately; subscribe to the row for bridge response
+      setMonitoringAgent(agent.full_name);
+      const channel = supabase
+        .channel(`monitor_req_${req.id}`)
+        .on(
+          "postgres_changes",
+          { event: "UPDATE", schema: "public", table: "monitor_requests", filter: `id=eq.${req.id}` },
+          (payload) => {
+            const updated = payload.new as { status: string; response: string };
+            if (updated.status === "error") {
+              setMonitoringAgent(null);
+              alert("Monitor error: " + updated.response);
+            }
+            supabase.removeChannel(channel);
+          }
+        )
+        .subscribe();
+
+      setTimeout(() => {
+        setMonitoringAgent(null);
+        supabase.removeChannel(channel);
+      }, 15000);
     } catch (err) {
       console.error("Monitor error:", err);
     }

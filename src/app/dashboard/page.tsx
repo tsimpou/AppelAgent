@@ -1015,18 +1015,28 @@ export default function DashboardPage() {
                 <select
                   value={selectedAgent}
                   onChange={(e) => { setSelectedAgent(e.target.value); setCoachingText(''); setLiveAgentStatus(null) }}
-                  className="ml-auto bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 min-w-48"
+                  className="ml-auto bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 min-w-56"
                 >
                   <option value="">Επιλογή agent...</option>
-                  {vicidialAgents.length > 0
-                    ? vicidialAgents.map((a) => (
-                        <option key={a.id} value={a.display_name ?? a.username}>
-                          {a.display_name ?? a.username}
-                        </option>
-                      ))
-                    : Array.from(new Set(calls.map((c) => c.agent_name))).map((name) => (
+                  {liveAgents.length > 0 && (
+                    <optgroup label={`🟢 Live Σύνδεδεμένοι (${liveAgents.length})`}>
+                      {liveAgents.map((a) => {
+                        const statusIcon = a.status === 'INCALL' ? '🔴' : a.status === 'READY' ? '🟢' : a.status === 'PAUSED' ? '🟡' : '🔵'
+                        return (
+                          <option key={a.user_vicidial} value={a.full_name}>
+                            {statusIcon} {a.full_name} — {a.campaign_name} ({a.calls_today} κλ.)
+                          </option>
+                        )
+                      })}
+                    </optgroup>
+                  )}
+                  <optgroup label="📜 Ιστορικό">
+                    {Array.from(new Set(calls.map((c) => c.agent_name)))
+                      .filter((name) => !liveAgents.some((a) => a.full_name === name))
+                      .map((name) => (
                         <option key={name} value={name}>{name}</option>
                       ))}
+                  </optgroup>
                 </select>
               </div>
 
