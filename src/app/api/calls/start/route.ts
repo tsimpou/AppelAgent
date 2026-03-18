@@ -4,7 +4,7 @@ import { createSupabaseServer } from '@/lib/supabaseServer'
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { agent_name } = body as { agent_name: string }
+    const { agent_name, lead_id, campaign_id } = body as { agent_name: string; lead_id?: string | null; campaign_id?: string | null }
 
     if (!agent_name) {
       return NextResponse.json({ error: 'agent_name is required' }, { status: 400 })
@@ -13,7 +13,7 @@ export async function POST(request: NextRequest) {
     const supabaseServer = createSupabaseServer()
     const { data, error } = await supabaseServer
       .from('calls')
-      .insert({ agent_name, source: 'live' })
+      .insert({ agent_name, lead_id: lead_id ?? null, campaign_id: campaign_id ?? null, source: 'live' })
       .select('id')
       .single()
 
