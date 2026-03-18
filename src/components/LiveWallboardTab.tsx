@@ -1,8 +1,8 @@
 "use client";
 import { useState, useMemo } from "react";
-import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff } from "lucide-react";
+import { Radio, Phone, Clock, Users, PhoneCall, AlertCircle, Search, Eye, EyeOff, Ear, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { useLiveWallboard } from "@/hooks/useLiveWallboard";
+import { useLiveWallboard, type LiveAgent } from "@/hooks/useLiveWallboard";
 
 const STATUS_CFG = {
   INCALL: {
@@ -41,6 +41,30 @@ export default function LiveWallboardTab() {
   const { agents: rawAgents, groupStats, campaigns, lastUpdated } = useLiveWallboard();
   const [agents, setAgents] = useState(rawAgents);
   const [statusFilter, setStatusFilter] = useState("ALL");
+  const [monitoringAgent, setMonitoringAgent] = useState<string | null>(null);
+
+  async function handleListen(agent: LiveAgent) {
+    try {
+      const res = await fetch("/api/monitor-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id:  agent.session_id,
+          phone_login: agent.session_id,
+          server_ip:   "10.1.0.21",
+        }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setMonitoringAgent(agent.full_name);
+        setTimeout(() => setMonitoringAgent(null), 10000);
+      } else {
+        alert("Monitor error: " + data.response);
+      }
+    } catch (err) {
+      console.error("Monitor error:", err);
+    }
+  }
 
   // Sync hook data into local state (preserves optimistic monitored toggles)
   useMemo(() => {
@@ -339,6 +363,9 @@ export default function LiveWallboardTab() {
               <th className="text-center py-3 px-4 text-[10px] font-medium uppercase tracking-widest text-zinc-500 w-28">
                 QA Monitor
               </th>
+              <th className="text-center py-3 px-4 text-[10px] font-medium uppercase tracking-widest text-zinc-500 w-24">
+                Ακρόαση
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800/40">
@@ -409,9 +436,9 @@ export default function LiveWallboardTab() {
                         href={`http://10.1.0.21/vicidial/admin_modify_lead.php?lead_id=${encodeURIComponent(agent.lead_id)}`}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-indigo-400 hover:text-indigo-300 text-xs font-mono transition-colors"
+                        className="text-indigo-400 hover:text-indigo-300 text-xs font-mono underline underline-offset-2 transition-colors"
                       >
-                        {agent.lead_id}
+                        #{agent.lead_id}
                       </a>
                     ) : (
                       <span className="text-zinc-700 text-xs">—</span>
@@ -454,6 +481,20 @@ export default function LiveWallboardTab() {
                       )}
                     </div>
                   </td>
+                  {/* Ακρόαση */}
+                  <td className="py-3 px-4 text-center">
+                    {agent.status === "INCALL" ? (
+                      <button
+                        onClick={() => handleListen(agent)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 hover:bg-indigo-600/20 transition-all"
+                      >
+                        <Ear className="w-3.5 h-3.5" />
+                        Ακρόαση
+                      </button>
+                    ) : (
+                      <span className="text-zinc-700 text-xs">—</span>
+                    )}
+                  </td>
                 </tr>
               );
             })}
@@ -467,6 +508,25 @@ export default function LiveWallboardTab() {
           </div>
         )}
       </div>
+
+      {/* Monitoring toast */}
+      {monitoringAgent && (
+        <div className="fixed bottom-6 right-6 z-50 bg-indigo-950 border border-indigo-700 rounded-2xl px-5 py-4 shadow-2xl flex items-center gap-3">
+          <div className="w-8 h-8 bg-indigo-600/20 rounded-xl flex items-center justify-center">
+            <Ear className="w-4 h-4 text-indigo-400 animate-pulse" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-white">Ακρόαση ενεργή</p>
+            <p className="text-xs text-indigo-400">{monitoringAgent}</p>
+          </div>
+          <button
+            onClick={() => setMonitoringAgent(null)}
+            className="ml-2 text-zinc-500 hover:text-white transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
