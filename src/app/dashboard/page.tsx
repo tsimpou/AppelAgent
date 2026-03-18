@@ -21,6 +21,7 @@ interface Call {
   performance_score: number
   source: string | null
   lead_id: string | null
+  recording_url: string | null
 }
 interface Violation {
   id: string
@@ -147,6 +148,8 @@ export default function DashboardPage() {
   const [selectedAgent, setSelectedAgent] = useState<string>('')
   const [agentFeedbacks, setAgentFeedbacks] = useState<CallFeedback[]>([])
   const [agentCalls, setAgentCalls] = useState<Call[]>([])
+  const [agentViolations, setAgentViolations] = useState<Violation[]>([])
+  const [liveAgentStatus, setLiveAgentStatus] = useState<{ status: string; lead_id: string | null; calls_today: number; campaign_name: string } | null>(null)
   const [expandedFeedback, setExpandedFeedback] = useState<string | null>(null)
   const [isCoachingStreaming, setIsCoachingStreaming] = useState(false)
   const [coachingText, setCoachingText] = useState('')
@@ -199,22 +202,35 @@ export default function DashboardPage() {
 
   const fetchAgentData = useCallback(async (agentName: string) => {
     if (!agentName) return
-    const [feedbackRes, callsRes] = await Promise.all([
+    const [feedbackRes, callsRes, violationsRes, liveRes] = await Promise.all([
       supabase
         .from('call_feedback')
         .select('*')
         .eq('agent_name', agentName)
         .order('created_at', { ascending: false })
-        .limit(10),
+        .limit(50),
       supabase
         .from('calls')
         .select('*')
         .eq('agent_name', agentName)
         .order('started_at', { ascending: false })
-        .limit(50),
+        .limit(100),
+      supabase
+        .from('violations')
+        .select('*')
+        .eq('agent_name', agentName)
+        .order('occurred_at', { ascending: false })
+        .limit(100),
+      supabase
+        .from('live_agents')
+        .select('status, lead_id, calls_today, campaign_name')
+        .eq('full_name', agentName)
+        .maybeSingle(),
     ])
     setAgentFeedbacks(feedbackRes.data ?? [])
     setAgentCalls(callsRes.data ?? [])
+    setAgentViolations(violationsRes.data ?? [])
+    setLiveAgentStatus(liveRes.data ?? null)
   }, [])
 
   const fetchAllData = useCallback(async () => {
@@ -958,171 +974,354 @@ export default function DashboardPage() {
         )}
 
         {/* ── TAB 7: Agents ────────────────────────────────────────────── */}
-        {activeTab === 'agents' && (
-          <div className="space-y-5">
-            <div className="flex items-center gap-3 flex-wrap">
-              <Users className="w-5 h-5 text-indigo-400" />
-              <h2 className="text-lg font-semibold">Ανάλυση Agent</h2>
-              <select
-                value={selectedAgent}
-                onChange={(e) => { setSelectedAgent(e.target.value); setCoachingText('') }}
-                className="ml-auto bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 min-w-48"
-              >
-                <option value="">Επιλογή agent...</option>
-                {vicidialAgents.length > 0
-                  ? vicidialAgents.map((a) => (
-                      <option key={a.id} value={a.display_name ?? a.username}>
-                        {a.display_name ?? a.username}
-                      </option>
-                    ))
-                  : Array.from(new Set(calls.map((c) => c.agent_name))).map((name) => (
-                      <option key={name} value={name}>{name}</option>
+        {activeTab === 'agents' && (() => {
+          const recordedCalls  = agentCalls.filter((c) => c.recording_url)
+          const totalViolations = agentCalls.reduce((s, c) => s + (c.total_violations ?? 0), 0)
+          const avgScore = agentFeedbacks.length > 0
+            ? Math.round(agentFeedbacks.reduce((s, f) => s + f.score, 0) / agentFeedbacks.length)
+            : null
+          const liveScore = agentFeedbacks[0]?.score ?? null
+          const validDur = agentCalls.filter((c) => c.duration_seconds)
+          const avgDur = validDur.length > 0
+            ? Math.round(validDur.reduce((s, c) => s + (c.duration_seconds ?? 0), 0) / validDur.length)
+            : null
+
+          // Problem analysis
+          const violationReasons = agentViolations.reduce<Record<string, number>>((acc, v) => {
+            const key = v.reason ?? 'Άγνωστη παράβαση'
+            acc[key] = (acc[key] ?? 0) + 1
+            return acc
+          }, {})
+          const topProblems = Object.entries(violationReasons).sort((a, b) => b[1] - a[1]).slice(0, 5)
+
+          const liveStatusColors: Record<string, string> = {
+            INCALL: 'bg-red-500/10 border-red-500/30 text-red-300',
+            READY:  'bg-green-500/10 border-green-500/30 text-green-300',
+            PAUSED: 'bg-yellow-500/10 border-yellow-500/30 text-yellow-300',
+            DISPO:  'bg-blue-500/10 border-blue-500/30 text-blue-300',
+          }
+
+          return (
+            <div className="space-y-5">
+
+              {/* Header + selector */}
+              <div className="flex items-center gap-3 flex-wrap">
+                <Users className="w-5 h-5 text-indigo-400" />
+                <h2 className="text-lg font-semibold">Ανάλυση Agent</h2>
+                <select
+                  value={selectedAgent}
+                  onChange={(e) => { setSelectedAgent(e.target.value); setCoachingText(''); setLiveAgentStatus(null) }}
+                  className="ml-auto bg-zinc-800 border border-zinc-700 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40 min-w-48"
+                >
+                  <option value="">Επιλογή agent...</option>
+                  {vicidialAgents.length > 0
+                    ? vicidialAgents.map((a) => (
+                        <option key={a.id} value={a.display_name ?? a.username}>
+                          {a.display_name ?? a.username}
+                        </option>
+                      ))
+                    : Array.from(new Set(calls.map((c) => c.agent_name))).map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                </select>
+              </div>
+
+              {!selectedAgent && (
+                <p className="text-zinc-500 text-sm text-center py-16">Επιλέξτε agent για να δείτε στατιστικά και coaching.</p>
+              )}
+
+              {selectedAgent && (
+                <>
+                  {/* Live status banner */}
+                  {liveAgentStatus && (
+                    <div className={`flex items-center gap-4 px-5 py-3.5 rounded-2xl border text-sm ${liveStatusColors[liveAgentStatus.status] ?? 'bg-zinc-800/50 border-zinc-700 text-zinc-300'}`}>
+                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${liveAgentStatus.status === 'INCALL' ? 'bg-red-500 animate-pulse' : liveAgentStatus.status === 'READY' ? 'bg-green-500' : liveAgentStatus.status === 'PAUSED' ? 'bg-yellow-500' : 'bg-blue-500'}`} />
+                      <span className="font-medium">LIVE —</span>
+                      <span>
+                        {liveAgentStatus.status === 'INCALL' ? 'Σε κλήση' : liveAgentStatus.status === 'READY' ? 'Διαθέσιμος' : liveAgentStatus.status === 'PAUSED' ? 'Παύση' : liveAgentStatus.status === 'DISPO' ? 'Αποτέλεσμα' : liveAgentStatus.status}
+                      </span>
+                      {liveAgentStatus.lead_id && liveAgentStatus.lead_id !== '0' && (
+                        <span className="text-xs opacity-80">
+                          Lead:{' '}
+                          <a href={`http://10.1.0.21/vicidial/admin_modify_lead.php?lead_id=${encodeURIComponent(liveAgentStatus.lead_id)}`} target="_blank" rel="noopener noreferrer" className="underline font-mono">
+                            #{liveAgentStatus.lead_id}
+                          </a>
+                        </span>
+                      )}
+                      <span className="text-xs opacity-80">{liveAgentStatus.campaign_name}</span>
+                      <span className="ml-auto text-xs opacity-80">{liveAgentStatus.calls_today} κλήσεις σήμερα</span>
+                    </div>
+                  )}
+
+                  {/* Stat cards */}
+                  <div className="grid grid-cols-2 lg:grid-cols-6 gap-3">
+                    {[
+                      { label: 'ΣΥΝΟΛΙΚΕΣ ΚΛΗΣΕΙΣ', value: agentCalls.length, color: 'text-indigo-400' },
+                      { label: 'ΜΕ ΗΧΟΓΡΑΦΗΣΗ', value: recordedCalls.length, color: 'text-blue-400' },
+                      { label: 'ΜΕΣΗ ΒΑΘΜΟΛΟΓΙΑ', value: avgScore !== null ? `${avgScore}` : '—', color: avgScore !== null ? (avgScore >= 80 ? 'text-green-400' : avgScore >= 50 ? 'text-yellow-400' : 'text-red-400') : 'text-zinc-500' },
+                      { label: 'LIVE SCORE', value: liveScore !== null ? `${liveScore}` : '—', color: liveScore !== null ? (liveScore >= 80 ? 'text-green-400' : liveScore >= 50 ? 'text-yellow-400' : 'text-red-400') : 'text-zinc-500', sub: 'τελευταία κλήση' },
+                      { label: 'ΠΑΡΑΒΑΣΕΙΣ', value: totalViolations, color: totalViolations > 0 ? 'text-red-400' : 'text-green-400' },
+                      { label: 'ΜΕΣΗ ΔΙΑΡΚΕΙΑ', value: avgDur !== null ? formatDuration(avgDur) : '—', color: 'text-green-400' },
+                    ].map((s) => (
+                      <div key={s.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-4">
+                        <p className="text-[10px] text-zinc-500 uppercase tracking-wider mb-1.5">{s.label}</p>
+                        <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
+                        {'sub' in s && s.sub && <p className="text-[10px] text-zinc-600 mt-0.5">{s.sub}</p>}
+                      </div>
                     ))}
-              </select>
-            </div>
-
-            {!selectedAgent && (
-              <p className="text-zinc-500 text-sm text-center py-16">Επιλέξτε agent για να δείτε στατιστικά και coaching.</p>
-            )}
-
-            {selectedAgent && (
-              <>
-                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-                  {[
-                    { label: 'Συνολικές κλήσεις', value: agentCalls.length, color: 'text-indigo-400' },
-                    {
-                      label: 'Μέση βαθμολογία',
-                      value: agentFeedbacks.length > 0
-                        ? `${Math.round(agentFeedbacks.reduce((s, f) => s + f.score, 0) / agentFeedbacks.length)}/100`
-                        : '—',
-                      color: 'text-yellow-400',
-                    },
-                    {
-                      label: 'Παραβάσεις',
-                      value: agentCalls.reduce((s, c) => s + (c.total_violations ?? 0), 0),
-                      color: 'text-red-400',
-                    },
-                    {
-                      label: 'Μέση διάρκεια',
-                      value: (() => {
-                        const valid = agentCalls.filter((c) => c.duration_seconds)
-                        if (!valid.length) return '—'
-                        const avg = Math.round(valid.reduce((s, c) => s + (c.duration_seconds ?? 0), 0) / valid.length)
-                        return formatDuration(avg)
-                      })(),
-                      color: 'text-green-400',
-                    },
-                  ].map((s) => (
-                    <div key={s.label} className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-                      <p className="text-xs text-zinc-500 uppercase tracking-wider mb-2">{s.label}</p>
-                      <p className={`text-2xl font-bold ${s.color}`}>{s.value}</p>
-                    </div>
-                  ))}
-                </div>
-
-                {agentFeedbacks.length > 0 && (
-                  <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-                    <h3 className="text-sm font-semibold text-zinc-300 mb-4">Βαθμολογία τελευταίων 7 ημερών</h3>
-                    <div className="flex items-end gap-2 h-24">
-                      {agentScoreHistory.map((day, i) => (
-                        <div key={i} className="flex-1 flex flex-col items-center gap-1">
-                          <span className="text-xs text-zinc-500">{day.avg ?? '—'}</span>
-                          <div
-                            className={`w-full rounded-t transition-all ${day.avg === null ? 'bg-zinc-800' : day.avg >= 80 ? 'bg-green-600' : day.avg >= 50 ? 'bg-yellow-600' : 'bg-red-600'}`}
-                            style={{ height: day.avg ? `${(day.avg / 100) * 80}px` : '4px' }}
-                          />
-                          <span className="text-xs text-zinc-600">{day.label}</span>
-                        </div>
-                      ))}
-                    </div>
                   </div>
-                )}
 
-                <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
-                  <div className="flex items-center justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <Bot className="w-4 h-4 text-indigo-400" />
-                      <h3 className="text-sm font-semibold">AI Coaching Tips</h3>
+                  {/* Score bar chart */}
+                  {agentFeedbacks.length > 0 && (
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+                      <h3 className="text-sm font-semibold text-zinc-300 mb-4">Βαθμολογία τελευταίων 7 ημερών</h3>
+                      <div className="flex items-end gap-2 h-24">
+                        {agentScoreHistory.map((day, i) => (
+                          <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                            <span className="text-xs text-zinc-500">{day.avg ?? '—'}</span>
+                            <div
+                              className={`w-full rounded-t transition-all ${day.avg === null ? 'bg-zinc-800' : day.avg >= 80 ? 'bg-green-600' : day.avg >= 50 ? 'bg-yellow-600' : 'bg-red-600'}`}
+                              style={{ height: day.avg ? `${(day.avg / 100) * 80}px` : '4px' }}
+                            />
+                            <span className="text-xs text-zinc-600">{day.label}</span>
+                          </div>
+                        ))}
+                      </div>
                     </div>
-                    <button
-                      onClick={generateCoaching}
-                      disabled={isCoachingStreaming || agentFeedbacks.length === 0}
-                      className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors"
-                    >
-                      <Sparkles className={`w-3 h-3 ${isCoachingStreaming ? 'animate-pulse' : ''}`} />
-                      Δημιούργησε Plan
-                    </button>
-                  </div>
-                  {!coachingText && !isCoachingStreaming && (
-                    <p className="text-xs text-zinc-600">
-                      {agentFeedbacks.length === 0
-                        ? 'Δεν υπάρχουν αξιολογήσεις για αυτόν τον agent.'
-                        : 'Πατήστε «Δημιούργησε Plan» για AI ανάλυση.'}
-                    </p>
                   )}
-                  {isCoachingStreaming && !coachingText && (
-                    <p className="text-xs text-zinc-400 animate-pulse">Ανάλυση απόδοσης...</p>
-                  )}
-                  {coachingText && (
-                    <p className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
-                      {coachingText}
-                      {isCoachingStreaming && <span className="inline-block w-0.5 h-4 bg-white animate-pulse ml-0.5 align-middle" />}
-                    </p>
-                  )}
-                </div>
 
-                {agentFeedbacks.length > 0 && (
+                  {/* Call history table */}
                   <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
-                    <div className="px-5 py-3.5 border-b border-zinc-800">
-                      <h3 className="text-sm font-semibold">Τελευταίες {agentFeedbacks.length} Αξιολογήσεις</h3>
+                    <div className="px-5 py-3.5 border-b border-zinc-800 flex items-center justify-between">
+                      <h3 className="text-sm font-semibold">
+                        Κλήσεις ({agentCalls.length} σύνολο · {recordedCalls.length} με ηχογράφηση)
+                      </h3>
+                      {agentCalls.length > 0 && (
+                        <span className="text-xs text-zinc-500">
+                          Score range:{' '}
+                          <span className="text-white font-mono">
+                            {Math.min(...agentFeedbacks.map(f => f.score))} – {Math.max(...agentFeedbacks.map(f => f.score))}
+                          </span>
+                        </span>
+                      )}
                     </div>
-                    <div className="divide-y divide-zinc-800/50">
-                      {agentFeedbacks.map((fb) => (
-                        <div key={fb.id} className="px-5 py-3">
-                          <button
-                            onClick={() => setExpandedFeedback(expandedFeedback === fb.id ? null : fb.id)}
-                            className="w-full flex items-center justify-between text-left"
-                          >
-                            <div className="flex items-center gap-3">
-                              <ScoreBadge score={fb.score} />
-                              <span className="text-xs text-zinc-400">
-                                {new Date(fb.created_at).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                    {agentCalls.length === 0 ? (
+                      <p className="text-zinc-600 text-sm text-center py-10">Δεν υπάρχουν κλήσεις</p>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-zinc-800">
+                              {['Ημερομηνία', 'Lead ID', 'Ηχογράφηση', 'Score', 'Παραβάσεις', 'Διάρκεια', 'Πηγή'].map((h) => (
+                                <th key={h} className="text-left py-2.5 px-4 text-[10px] font-medium uppercase tracking-widest text-zinc-500">{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-zinc-800/40">
+                            {agentCalls.map((call) => {
+                              const fb = agentFeedbacks.find((f) => f.call_id === call.id)
+                              const score = fb?.score ?? call.performance_score ?? null
+                              return (
+                                <tr key={call.id} className="hover:bg-zinc-800/20 transition-colors">
+                                  <td className="py-2.5 px-4 text-zinc-400 whitespace-nowrap">
+                                    {new Date(call.started_at).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: '2-digit' })}
+                                    {' '}
+                                    <span className="text-zinc-600">{new Date(call.started_at).toLocaleTimeString('el-GR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                  </td>
+                                  <td className="py-2.5 px-4">
+                                    {call.lead_id && call.lead_id !== '0' ? (
+                                      <a
+                                        href={`http://10.1.0.21/vicidial/admin_modify_lead.php?lead_id=${encodeURIComponent(call.lead_id)}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-indigo-400 hover:text-indigo-300 font-mono transition-colors"
+                                      >
+                                        #{call.lead_id}
+                                      </a>
+                                    ) : <span className="text-zinc-700">—</span>}
+                                  </td>
+                                  <td className="py-2.5 px-4">
+                                    {call.recording_url ? (
+                                      <a href={call.recording_url} target="_blank" rel="noopener noreferrer"
+                                        className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300 transition-colors bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full">
+                                        🎵 Άκου
+                                      </a>
+                                    ) : (
+                                      <span className="text-zinc-700">—</span>
+                                    )}
+                                  </td>
+                                  <td className="py-2.5 px-4">
+                                    {score !== null ? <ScoreBadge score={score} /> : <span className="text-zinc-700">—</span>}
+                                  </td>
+                                  <td className="py-2.5 px-4">
+                                    <span className={`font-bold ${(call.total_violations ?? 0) > 0 ? 'text-red-400' : 'text-green-400'}`}>
+                                      {call.total_violations ?? 0}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-4 text-zinc-400 font-mono">{formatDuration(call.duration_seconds)}</td>
+                                  <td className="py-2.5 px-4"><SourceBadge source={call.source} /></td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Problems panel */}
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    {/* Top violation reasons */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+                      <div className="flex items-center gap-2 mb-4">
+                        <AlertTriangle className="w-4 h-4 text-red-400" />
+                        <h3 className="text-sm font-semibold">Κύρια Προβλήματα</h3>
+                        <span className="ml-auto text-xs text-zinc-500">{agentViolations.length} παραβάσεις σύνολο</span>
+                      </div>
+                      {topProblems.length === 0 ? (
+                        <p className="text-xs text-green-400 flex items-center gap-2">✅ Καμία παράβαση καταγράφηκε</p>
+                      ) : (
+                        <div className="space-y-2.5">
+                          {topProblems.map(([reason, count], i) => (
+                            <div key={i} className="flex items-start gap-3">
+                              <span className={`text-xs font-bold shrink-0 w-5 h-5 rounded-full flex items-center justify-center ${i === 0 ? 'bg-red-500/20 text-red-400' : i === 1 ? 'bg-orange-500/20 text-orange-400' : 'bg-zinc-700 text-zinc-400'}`}>
+                                {i + 1}
                               </span>
-                              <SourceBadge source={fb.source} />
-                            </div>
-                            <ChevronDown className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform ${expandedFeedback === fb.id ? 'rotate-180' : ''}`} />
-                          </button>
-                          {expandedFeedback === fb.id && (
-                            <div className="mt-3 space-y-2">
-                              {fb.summary && <p className="text-sm text-zinc-300 bg-zinc-800/50 px-3 py-2 rounded-xl">{fb.summary}</p>}
-                              {(fb.positives ?? []).length > 0 && (
-                                <div>
-                                  <p className="text-xs font-semibold text-green-400 mb-1">Θετικά</p>
-                                  {(fb.positives ?? []).map((p, i) => <p key={i} className="text-xs text-zinc-300">• {p}</p>)}
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs text-zinc-300 line-clamp-2">{reason}</p>
+                                <div className="flex items-center gap-2 mt-1">
+                                  <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                                    <div
+                                      className={`h-full rounded-full ${i === 0 ? 'bg-red-500' : i === 1 ? 'bg-orange-500' : 'bg-zinc-500'}`}
+                                      style={{ width: `${(count / (topProblems[0][1])) * 100}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-[10px] text-zinc-500 shrink-0">{count}×</span>
                                 </div>
-                              )}
-                              {(fb.improvements ?? []).length > 0 && (
-                                <div>
-                                  <p className="text-xs font-semibold text-yellow-400 mb-1">Βελτίωση</p>
-                                  {(fb.improvements ?? []).map((p, i) => <p key={i} className="text-xs text-zinc-300">• {p}</p>)}
-                                </div>
-                              )}
-                              {fb.next_call_goal && (
-                                <p className="text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
-                                  {fb.next_call_goal}
-                                </p>
-                              )}
+                              </div>
                             </div>
-                          )}
+                          ))}
                         </div>
-                      ))}
+                      )}
+                    </div>
+
+                    {/* AI Coaching */}
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl p-5">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Bot className="w-4 h-4 text-indigo-400" />
+                          <h3 className="text-sm font-semibold">AI Coaching Plan</h3>
+                        </div>
+                        <button
+                          onClick={generateCoaching}
+                          disabled={isCoachingStreaming || agentFeedbacks.length === 0}
+                          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors"
+                        >
+                          <Sparkles className={`w-3 h-3 ${isCoachingStreaming ? 'animate-pulse' : ''}`} />
+                          Δημιούργησε Plan
+                        </button>
+                      </div>
+                      <div className="overflow-y-auto max-h-52">
+                        {!coachingText && !isCoachingStreaming && (
+                          <p className="text-xs text-zinc-600">
+                            {agentFeedbacks.length === 0
+                              ? 'Δεν υπάρχουν αξιολογήσεις για αυτόν τον agent.'
+                              : 'Πατήστε «Δημιούργησε Plan» για AI ανάλυση.'}
+                          </p>
+                        )}
+                        {isCoachingStreaming && !coachingText && (
+                          <p className="text-xs text-zinc-400 animate-pulse">Ανάλυση απόδοσης...</p>
+                        )}
+                        {coachingText && (
+                          <p className="text-xs text-zinc-300 whitespace-pre-wrap leading-relaxed">
+                            {coachingText}
+                            {isCoachingStreaming && <span className="inline-block w-0.5 h-4 bg-white animate-pulse ml-0.5 align-middle" />}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+
+                  {/* Call feedback list */}
+                  {agentFeedbacks.length > 0 && (
+                    <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+                      <div className="px-5 py-3.5 border-b border-zinc-800">
+                        <h3 className="text-sm font-semibold">Αξιολογήσεις Κλήσεων ({agentFeedbacks.length})</h3>
+                      </div>
+                      <div className="divide-y divide-zinc-800/50">
+                        {agentFeedbacks.map((fb) => {
+                          const matchedCall = agentCalls.find((c) => c.id === fb.call_id)
+                          return (
+                            <div key={fb.id} className="px-5 py-3">
+                              <button
+                                onClick={() => setExpandedFeedback(expandedFeedback === fb.id ? null : fb.id)}
+                                className="w-full flex items-center justify-between text-left"
+                              >
+                                <div className="flex items-center gap-3 flex-wrap">
+                                  <ScoreBadge score={fb.score} />
+                                  <span className="text-xs text-zinc-400">
+                                    {new Date(fb.created_at).toLocaleDateString('el-GR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                                  {matchedCall?.lead_id && matchedCall.lead_id !== '0' && (
+                                    <a
+                                      href={`http://10.1.0.21/vicidial/admin_modify_lead.php?lead_id=${encodeURIComponent(matchedCall.lead_id)}`}
+                                      target="_blank" rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="text-[10px] text-indigo-400 font-mono hover:underline"
+                                    >
+                                      Lead #{matchedCall.lead_id}
+                                    </a>
+                                  )}
+                                  {matchedCall?.recording_url && (
+                                    <a href={matchedCall.recording_url} target="_blank" rel="noopener noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="text-[10px] text-blue-400 hover:text-blue-300 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full">
+                                      🎵 Rec
+                                    </a>
+                                  )}
+                                  {fb.has_violation && (
+                                    <span className="text-[10px] bg-red-500/10 text-red-400 border border-red-500/20 px-2 py-0.5 rounded-full">⚠ Παράβαση</span>
+                                  )}
+                                  <SourceBadge source={fb.source} />
+                                </div>
+                                <ChevronDown className={`w-4 h-4 text-zinc-400 shrink-0 transition-transform ${expandedFeedback === fb.id ? 'rotate-180' : ''}`} />
+                              </button>
+                              {expandedFeedback === fb.id && (
+                                <div className="mt-3 space-y-2">
+                                  {fb.summary && <p className="text-sm text-zinc-300 bg-zinc-800/50 px-3 py-2 rounded-xl">{fb.summary}</p>}
+                                  {fb.violation_reason && (
+                                    <p className="text-xs text-red-300 bg-red-500/5 border border-red-500/20 px-3 py-2 rounded-xl">⚠ {fb.violation_reason}</p>
+                                  )}
+                                  {(fb.positives ?? []).length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-semibold text-green-400 mb-1">Θετικά</p>
+                                      {(fb.positives ?? []).map((p, i) => <p key={i} className="text-xs text-zinc-300">• {p}</p>)}
+                                    </div>
+                                  )}
+                                  {(fb.improvements ?? []).length > 0 && (
+                                    <div>
+                                      <p className="text-xs font-semibold text-yellow-400 mb-1">Βελτίωση</p>
+                                      {(fb.improvements ?? []).map((p, i) => <p key={i} className="text-xs text-zinc-300">• {p}</p>)}
+                                    </div>
+                                  )}
+                                  {fb.next_call_goal && (
+                                    <p className="text-xs text-indigo-300 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-3 py-2">
+                                      🎯 {fb.next_call_goal}
+                                    </p>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )
+        })()}
       </div>
     </main>
   </div>
