@@ -160,7 +160,7 @@ export default function DashboardPage() {
 
   // ── Data fetching ────────────────────────────────────────────────────
   const fetchCalls = useCallback(async () => {
-    const res = await fetch('/api/calls')
+    const res = await fetch('/api/calls', { cache: 'no-store', next: { revalidate: 0 } })
     const data = await res.json()
     setCalls(data.calls ?? [])
   }, [])

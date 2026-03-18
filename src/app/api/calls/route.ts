@@ -14,7 +14,9 @@ export async function GET() {
 
     if (error) throw error
 
-    return NextResponse.json({ calls: data ?? [] })
+    return NextResponse.json({ calls: data ?? [] }, {
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    })
   } catch (error) {
     console.error('Calls GET error:', error)
     return NextResponse.json({ error: 'Failed to fetch calls' }, { status: 500 })
