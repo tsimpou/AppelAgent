@@ -47,7 +47,7 @@ function getStatusCfg(s: string) {
 }
 
 export default function LiveWallboardTab() {
-  const { agents: rawAgents, groupStats, campaigns, lastUpdated } = useLiveWallboard();
+  const { agents: rawAgents, groupStats, campaigns, lastUpdated, error: wallboardError, refetch } = useLiveWallboard();
   const [agents, setAgents] = useState(rawAgents);
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [monitoringAgent, setMonitoringAgent] = useState<string | null>(null);
@@ -158,14 +158,23 @@ export default function LiveWallboardTab() {
     });
   }, [agents, statusFilter, campaignFilter, search]);
 
-  const uniqueCampaigns = useMemo(
-    () =>
-      Array.from(new Set(agents.map((a) => a.campaign_id))).map((cid) => ({
-        id: cid,
-        name: agents.find((a) => a.campaign_id === cid)?.campaign_name ?? cid,
-      })),
-    [agents]
-  );
+  const uniqueCampaigns = useMemo(() => {
+    const byId = new Map<string, string>();
+
+    for (const campaign of campaigns) {
+      byId.set(campaign.campaign_id, campaign.campaign_name || campaign.campaign_id);
+    }
+
+    for (const agent of agents) {
+      if (!byId.has(agent.campaign_id)) {
+        byId.set(agent.campaign_id, agent.campaign_name || agent.campaign_id);
+      }
+    }
+
+    return Array.from(byId.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.id.localeCompare(b.id));
+  }, [agents, campaigns]);
 
   const activeCampaigns = campaigns.filter((c) => c.total_agents > 0);
 
@@ -185,6 +194,23 @@ export default function LiveWallboardTab() {
             : "Σύνδεση..."}
         </div>
       </div>
+
+      {wallboardError && (
+        <div className="bg-red-950/40 border border-red-700/50 rounded-xl px-4 py-3 flex items-start justify-between gap-4">
+          <div className="text-xs text-red-200">
+            <p className="font-semibold">Αποτυχία φόρτωσης live δεδομένων</p>
+            <p className="text-red-300/90 mt-1">{wallboardError}</p>
+          </div>
+          <button
+            onClick={() => {
+              void refetch();
+            }}
+            className="shrink-0 px-3 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-200 border border-red-500/30 hover:bg-red-500/25 transition-colors"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Group Stats */}
       <div className="grid grid-cols-5 gap-3">

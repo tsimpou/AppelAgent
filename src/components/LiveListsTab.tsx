@@ -48,6 +48,7 @@ export default function LiveListsTab() {
   const [alertsByList, setAlertsByList] = useState<Record<string, ListAlertRow>>({})
   const [thresholdInputs, setThresholdInputs] = useState<Record<string, string>>({})
   const [isLoading, setIsLoading] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [savingListId, setSavingListId] = useState<string | null>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   const inFlightNotificationFor = useRef<Set<string>>(new Set())
@@ -70,6 +71,13 @@ export default function LiveListsTab() {
       const nextLists = listsRes.data ?? []
       const nextAlerts = alertsRes.data ?? []
 
+      const firstError = listsRes.error ?? alertsRes.error
+      if (firstError) {
+        setLoadError(firstError.message)
+      } else {
+        setLoadError(null)
+      }
+
       const byList: Record<string, ListAlertRow> = {}
       for (const alert of nextAlerts) {
         byList[alert.list_id] = alert
@@ -87,6 +95,9 @@ export default function LiveListsTab() {
         return updated
       })
       setLastUpdated(new Date())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error while loading lists'
+      setLoadError(message)
     } finally {
       setIsLoading(false)
     }
@@ -203,6 +214,22 @@ export default function LiveListsTab() {
       </div>
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-2xl overflow-hidden">
+        {loadError && (
+          <div className="px-4 py-3 border-b border-red-900/40 bg-red-950/30 flex items-center justify-between gap-3">
+            <div className="text-xs text-red-200">
+              <p className="font-semibold">Αποτυχία φόρτωσης λιστών</p>
+              <p className="text-red-300/90 mt-1">{loadError}</p>
+            </div>
+            <button
+              onClick={() => {
+                void refreshData()
+              }}
+              className="shrink-0 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-red-500/15 text-red-200 border border-red-500/30 hover:bg-red-500/25 transition-colors"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

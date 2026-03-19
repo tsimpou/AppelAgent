@@ -49,9 +49,10 @@ export function useLiveWallboard() {
   const [groupStats, setGroupStats] = useState<GroupStats | null>(null);
   const [campaigns, setCampaigns] = useState<LiveCampaign[]>([]);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const fetchAll = useCallback(async () => {
-    const [{ data: ag }, { data: gs }, { data: ca }] = await Promise.all([
+    const [{ data: ag, error: agError }, { data: gs, error: gsError }, { data: ca, error: caError }] = await Promise.all([
       supabase
         .from("live_agents")
         .select("*")
@@ -64,6 +65,14 @@ export function useLiveWallboard() {
         .eq("active", true)
         .order("total_agents", { ascending: false }),
     ]);
+
+    const firstError = agError ?? gsError ?? caError;
+    if (firstError) {
+      setError(firstError.message);
+    } else {
+      setError(null);
+    }
+
     if (ag) setAgents(ag);
     if (gs) setGroupStats(gs);
     if (ca) setCampaigns(ca);
@@ -100,5 +109,5 @@ export function useLiveWallboard() {
   const byStatus = (status: string) => agents.filter((a) => a.status === status);
   const byCampaign = (cid: string) => agents.filter((a) => a.campaign_id === cid);
 
-  return { agents, groupStats, campaigns, lastUpdated, byStatus, byCampaign, refetch: fetchAll };
+  return { agents, groupStats, campaigns, lastUpdated, error, byStatus, byCampaign, refetch: fetchAll };
 }
