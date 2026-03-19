@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import LiveWallboardTab from '@/components/LiveWallboardTab'
+import LiveListsTab from '@/components/LiveListsTab'
 import { useLiveWallboard, type LiveAgent as LiveAgentWallboard } from '@/hooks/useLiveWallboard'
 
 // ── Types ──────────────────────────────────────────────────────────────
@@ -67,7 +68,7 @@ interface VicidialAgent {
   active: boolean
 }
 
-type TabId = 'overview' | 'briefing' | 'banwords' | 'violations' | 'calls' | 'leaderboard' | 'agents' | 'live'
+type TabId = 'overview' | 'briefing' | 'banwords' | 'violations' | 'calls' | 'leaderboard' | 'agents' | 'live' | 'lists'
 
 // ── Helpers ────────────────────────────────────────────────────────────
 function ScoreBadge({ score }: { score: number }) {
@@ -112,6 +113,7 @@ const TABS: { id: TabId; label: string }[] = [
   { id: 'calls',       label: '📞 Calls' },
   { id: 'leaderboard', label: '🏆 Leaderboard' },
   { id: 'agents',      label: '👤 Agents' },
+  { id: 'lists',       label: '📑 Λίστες' },
 ]
 
 // ── Main Component ─────────────────────────────────────────────────────
@@ -524,6 +526,7 @@ export default function DashboardPage() {
             { id: 'leaderboard', icon: Trophy,          label: 'Leaderboard' },
             { id: 'agents',      icon: Users,           label: 'Agents' },
             { id: 'live',        icon: Radio,           label: 'Live Wallboard' },
+            { id: 'lists',       icon: LayoutDashboard, label: 'Λίστες' },
           ].map(({ id, icon: Icon, label }) => (
             <button
               key={id}
@@ -570,6 +573,7 @@ export default function DashboardPage() {
             {activeTab === 'leaderboard' && 'Leaderboard'}
             {activeTab === 'agents' && 'Agents'}
             {activeTab === 'live' && 'Live Wallboard'}
+            {activeTab === 'lists' && 'Λίστες'}
           </h1>
           <div className="flex-1" />
           {lastUpdated && (
@@ -588,6 +592,9 @@ export default function DashboardPage() {
 
         {/* ── TAB 0: Live Wallboard ────────────────────────────────────── */}
         {activeTab === 'live' && <LiveWallboardTab />}
+
+        {/* ── TAB 0b: Lists ────────────────────────────────────────────── */}
+        {activeTab === 'lists' && <LiveListsTab />}
 
         {/* ── TAB 1: Overview ──────────────────────────────────────────── */}
         {activeTab === 'overview' && (
