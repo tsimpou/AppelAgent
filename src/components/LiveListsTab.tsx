@@ -20,7 +20,6 @@ interface ListAlertRow {
   id: string
   list_id: string
   threshold: number
-  label: string | null
   notified_at: string | null
   active: boolean
 }
@@ -64,7 +63,7 @@ export default function LiveListsTab() {
           .order('remaining_count', { ascending: true }),
         supabase
           .from('list_alerts')
-          .select('id, list_id, threshold, label, notified_at, active')
+          .select('id, list_id, threshold, notified_at, active')
           .eq('active', true),
       ])
 
@@ -177,12 +176,11 @@ export default function LiveListsTab() {
           {
             list_id: list.list_id,
             threshold: parsed,
-            label: `Threshold ${list.list_name}`,
             active: true,
           },
           { onConflict: 'list_id' }
         )
-        .select('id, list_id, threshold, label, notified_at, active')
+        .select('id, list_id, threshold, notified_at, active')
         .single()
 
       if (error) {
